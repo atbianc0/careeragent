@@ -15,6 +15,7 @@ from app.schemas.application_packet import (
     ApplicationPacketRead,
 )
 from app.services.generator import generate_application_packet
+from app.services.tracker import log_event
 
 router = APIRouter()
 
@@ -138,4 +139,14 @@ def get_packet_file(
 
 @router.get("/{packet_id}", response_model=ApplicationPacketRead)
 def get_packet(packet_id: int, db: Session = Depends(get_db)) -> ApplicationPacketRead:
+    packet = _get_packet_or_404(db, packet_id)
+    log_event(
+        db,
+        job_id=packet.job_id,
+        packet_id=packet.id,
+        event_type="packet_viewed",
+        notes=f"Viewed packet #{packet.id}.",
+        old_status=packet.job.application_status if packet.job else None,
+        new_status=packet.job.application_status if packet.job else None,
+    )
     return _get_packet_or_404(db, packet_id)

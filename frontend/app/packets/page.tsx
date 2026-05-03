@@ -49,13 +49,14 @@ export default async function PacketsPage() {
   return (
     <div className="page">
       <section className="hero">
-        <span className="eyebrow">Stage 6 - Application Packet Generation</span>
+        <span className="eyebrow">Stage 7 - Packets + Tracking</span>
         <h1>Packets</h1>
         <p className="hero-copy">
           Stage 6 generates reviewable application packets. It does not submit applications.
         </p>
         <p className="hero-copy">
-          Generated outputs stay private in the local `outputs/application_packets/` folder and remain gitignored.
+          Generated outputs stay private in the local `outputs/application_packets/` folder, remain gitignored,
+          and packet detail views now log tracker activity.
         </p>
       </section>
 

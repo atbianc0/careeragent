@@ -47,8 +47,39 @@ export type Job = {
   scoring_raw_data: Record<string, unknown>;
   scored_at: string | null;
   application_status: string;
+  application_link_opened_at: string | null;
+  packet_generated_at: string | null;
+  applied_at: string | null;
+  follow_up_at: string | null;
+  interview_at: string | null;
+  rejected_at: string | null;
+  offer_at: string | null;
+  withdrawn_at: string | null;
+  closed_before_apply_at: string | null;
+  user_notes: string | null;
+  next_action: string | null;
+  next_action_due_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type ApplicationEvent = {
+  id: number;
+  job_id: number;
+  packet_id: number | null;
+  event_type: string;
+  event_time: string;
+  old_status: string | null;
+  new_status: string | null;
+  notes: string | null;
+  metadata_json: Record<string, unknown> | null;
+  created_at: string;
+  job: {
+    id: number;
+    company: string;
+    title: string;
+    application_status: string;
+  } | null;
 };
 
 export type ApplicationPacket = {
@@ -256,6 +287,45 @@ export type VerifyAllSummary = {
   likely_closed_count: number;
   closed_count: number;
   errors: string[];
+};
+
+export type TrackerSummary = {
+  total_jobs: number;
+  saved_count: number;
+  packet_ready_count: number;
+  application_opened_count: number;
+  applied_count: number;
+  follow_up_count: number;
+  interview_count: number;
+  rejected_count: number;
+  offer_count: number;
+  withdrawn_count: number;
+  closed_before_apply_count: number;
+  counts_by_status: Record<string, number>;
+  upcoming_follow_ups: Job[];
+  recent_events: ApplicationEvent[];
+};
+
+export type TrackerFilters = {
+  status?: string;
+  search?: string;
+};
+
+export type TrackerEventFilters = {
+  limit?: number;
+  job_id?: number;
+  event_type?: string;
+};
+
+export type TrackerMutationResponse = {
+  job: Job;
+  event: ApplicationEvent;
+};
+
+export type OpenApplicationResponse = {
+  job: Job;
+  event: ApplicationEvent;
+  url: string;
 };
 
 export type ProfileData = {
@@ -492,6 +562,86 @@ export async function getPacketFile(
 ): Promise<ApplicationPacketFilePreview> {
   const params = new URLSearchParams({ file_key: fileKey });
   return requestJson<ApplicationPacketFilePreview>(`/api/packets/${packetId}/file?${params.toString()}`);
+}
+
+export async function getTrackerSummary(): Promise<TrackerSummary> {
+  return requestJson<TrackerSummary>("/api/tracker/summary");
+}
+
+export async function getTrackerJobs(filters?: TrackerFilters): Promise<Job[]> {
+  const params = new URLSearchParams();
+  if (filters?.status) {
+    params.set("status", filters.status);
+  }
+  if (filters?.search) {
+    params.set("search", filters.search);
+  }
+
+  const query = params.toString();
+  return requestJson<Job[]>(`/api/tracker/jobs${query ? `?${query}` : ""}`);
+}
+
+export async function getJobTimeline(jobId: number | string): Promise<ApplicationEvent[]> {
+  return requestJson<ApplicationEvent[]>(`/api/tracker/jobs/${jobId}/timeline`);
+}
+
+export async function updateJobStatus(
+  jobId: number | string,
+  status: string,
+  notes?: string
+): Promise<TrackerMutationResponse> {
+  return requestJson<TrackerMutationResponse>(`/api/tracker/jobs/${jobId}/status`, {
+    method: "POST",
+    body: JSON.stringify({ status, notes })
+  });
+}
+
+export async function addJobNote(jobId: number | string, notes: string): Promise<TrackerMutationResponse> {
+  return requestJson<TrackerMutationResponse>(`/api/tracker/jobs/${jobId}/note`, {
+    method: "POST",
+    body: JSON.stringify({ notes })
+  });
+}
+
+export async function setFollowUp(
+  jobId: number | string,
+  followUpAt: string,
+  notes?: string
+): Promise<TrackerMutationResponse> {
+  return requestJson<TrackerMutationResponse>(`/api/tracker/jobs/${jobId}/follow-up`, {
+    method: "POST",
+    body: JSON.stringify({ follow_up_at: followUpAt, notes })
+  });
+}
+
+export async function completeFollowUp(jobId: number | string, notes?: string): Promise<TrackerMutationResponse> {
+  return requestJson<TrackerMutationResponse>(`/api/tracker/jobs/${jobId}/follow-up/complete`, {
+    method: "POST",
+    body: JSON.stringify({ notes })
+  });
+}
+
+export async function openApplicationLink(jobId: number | string): Promise<OpenApplicationResponse> {
+  return requestJson<OpenApplicationResponse>(`/api/tracker/jobs/${jobId}/open-application`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export async function getTrackerEvents(filters?: TrackerEventFilters): Promise<ApplicationEvent[]> {
+  const params = new URLSearchParams();
+  if (filters?.limit !== undefined) {
+    params.set("limit", String(filters.limit));
+  }
+  if (filters?.job_id !== undefined) {
+    params.set("job_id", String(filters.job_id));
+  }
+  if (filters?.event_type) {
+    params.set("event_type", filters.event_type);
+  }
+
+  const query = params.toString();
+  return requestJson<ApplicationEvent[]>(`/api/tracker/events${query ? `?${query}` : ""}`);
 }
 
 export async function parseJobImport(payload: JobImportRequest): Promise<JobParseResult> {

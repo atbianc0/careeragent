@@ -101,13 +101,14 @@ export default async function PacketDetailPage({
   return (
     <div className="page">
       <section className="hero">
-        <span className="eyebrow">Stage 6 Packet Detail</span>
+        <span className="eyebrow">Stage 7 Packet Detail</span>
         <h1>{packet.job?.title || "Application Packet"}</h1>
         <p className="hero-copy">
           {packet.job?.company || "Unknown Company"} • packet #{packet.id}
         </p>
         <p className="hero-copy">
-          Review all generated materials manually before using them. CareerAgent does not submit applications.
+          Review all generated materials manually before using them. CareerAgent does not submit applications, and opening
+          this page logs a packet view in the tracker.
         </p>
         <div className="button-row">
           <Link href="/packets" className="button secondary">

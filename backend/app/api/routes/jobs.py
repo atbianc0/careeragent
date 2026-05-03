@@ -20,6 +20,7 @@ from app.schemas.job import (
 from app.services.jobs.job_store import create_job, delete_job, get_job, list_jobs, list_recommendations, update_job
 from app.services.jobs.parser import parse_job_description, parse_job_url
 from app.services.scoring import build_job_scoring_updates, score_saved_job
+from app.services.tracker import log_event, promote_job_status_if_needed
 from app.services.verifier.verifier import build_job_verification_updates, verify_job_record, verify_job_url
 
 router = APIRouter()
@@ -63,7 +64,16 @@ def import_job(payload: JobImportRequest, db: Session = Depends(get_db)) -> JobR
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     parsed_job["source"] = payload.source
-    return create_job(db, parsed_job)
+    job = create_job(db, parsed_job)
+    log_event(
+        db,
+        job_id=job.id,
+        event_type="job_imported",
+        notes=f"Imported job from {payload.input_type} input.",
+        new_status=job.application_status,
+        metadata_json={"input_type": payload.input_type, "source": payload.source},
+    )
+    return job
 
 
 @router.post("/verify-url", response_model=JobVerificationResult)
@@ -109,6 +119,18 @@ def score_all_jobs(db: Session = Depends(get_db)) -> ScoreAllSummary:
             summary["skipped_count"] += 1
             summary["errors"].append(f"Job {job.id}: record disappeared before scoring could be saved.")
             continue
+        log_event(
+            db,
+            job_id=updated_job.id,
+            event_type="job_scored",
+            notes=f"Scored job at {updated_job.overall_priority_score}/100 overall priority.",
+            old_status=updated_job.application_status,
+            new_status=updated_job.application_status,
+            metadata_json={
+                "resume_match_score": updated_job.resume_match_score,
+                "overall_priority_score": updated_job.overall_priority_score,
+            },
+        )
         summary["scored_count"] += 1
         scored_jobs.append(updated_job)
 
@@ -188,7 +210,31 @@ def verify_all_jobs(db: Session = Depends(get_db)) -> VerifyAllSummary:
 
         result = verify_job_record(job)
         updates = build_job_verification_updates(job, result)
-        update_job(db, job.id, updates)
+        updated_job = update_job(db, job.id, updates)
+        if updated_job is None:
+            summary["skipped_count"] += 1
+            summary["errors"].append(f"Job {job.id}: record disappeared before verification could be saved.")
+            continue
+        log_event(
+            db,
+            job_id=updated_job.id,
+            event_type="job_verified",
+            notes=f"Verification status: {updated_job.verification_status}.",
+            old_status=updated_job.application_status,
+            new_status=updated_job.application_status,
+            metadata_json={
+                "verification_status": updated_job.verification_status,
+                "verification_score": updated_job.verification_score,
+                "likely_closed_score": updated_job.likely_closed_score,
+            },
+        )
+        if updated_job.verification_status in {"open", "probably_open"}:
+            promote_job_status_if_needed(
+                db,
+                updated_job.id,
+                "verified_open",
+                notes="Promoted to verified_open after verification found the posting appears active.",
+            )
         summary["verified_count"] += 1
         summary_key = f"{result['verification_status']}_count"
         if summary_key in summary:
@@ -215,6 +261,18 @@ def score_single_job(job_id: int, db: Session = Depends(get_db)) -> JobScoringRe
     updated_job = update_job(db, job.id, build_job_scoring_updates(result))
     if updated_job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} was not found.")
+    log_event(
+        db,
+        job_id=updated_job.id,
+        event_type="job_scored",
+        notes=f"Scored job at {updated_job.overall_priority_score}/100 overall priority.",
+        old_status=updated_job.application_status,
+        new_status=updated_job.application_status,
+        metadata_json={
+            "resume_match_score": updated_job.resume_match_score,
+            "overall_priority_score": updated_job.overall_priority_score,
+        },
+    )
     return {
         "job": updated_job,
         "score": _score_response_from_job(updated_job),
@@ -232,6 +290,26 @@ def verify_single_job(job_id: int, db: Session = Depends(get_db)) -> JobVerifica
     updated_job = update_job(db, job.id, updates)
     if updated_job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} was not found.")
+    log_event(
+        db,
+        job_id=updated_job.id,
+        event_type="job_verified",
+        notes=f"Verification status: {updated_job.verification_status}.",
+        old_status=updated_job.application_status,
+        new_status=updated_job.application_status,
+        metadata_json={
+            "verification_status": updated_job.verification_status,
+            "verification_score": updated_job.verification_score,
+            "likely_closed_score": updated_job.likely_closed_score,
+        },
+    )
+    if updated_job.verification_status in {"open", "probably_open"}:
+        promote_job_status_if_needed(
+            db,
+            updated_job.id,
+            "verified_open",
+            notes="Promoted to verified_open after verification found the posting appears active.",
+        )
     return {
         "job": updated_job,
         "verification": _verification_response_from_job(updated_job),

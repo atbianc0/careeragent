@@ -17,8 +17,8 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="CareerAgent API",
-    version="0.6.0",
-    description="Stage 6 application packet generation for a human-in-the-loop job search assistant.",
+    version="0.7.0",
+    description="Stage 7 tracker and action logging for a human-in-the-loop job search assistant.",
     lifespan=lifespan,
 )
 

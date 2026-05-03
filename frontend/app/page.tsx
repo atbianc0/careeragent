@@ -1,8 +1,8 @@
 import { StatCard } from "@/components/StatCard";
-import { getMarketSummary } from "@/lib/api";
+import { getMarketSummary, getTrackerSummary } from "@/lib/api";
 
 export default async function HomePage() {
-  const market = await getMarketSummary();
+  const [market, tracker] = await Promise.all([getMarketSummary(), getTrackerSummary()]);
   const topPriorityLabel = market.top_priority_job ? market.top_priority_job.title : "None yet";
   const topPriorityHint = market.top_priority_job
     ? `${market.top_priority_job.company} • priority ${market.top_priority_job.overall_priority_score}`
@@ -11,16 +11,16 @@ export default async function HomePage() {
   return (
     <div className="page">
       <section className="hero">
-        <span className="eyebrow">Stage 6 - Application Packet Generation</span>
+        <span className="eyebrow">Stage 7 - Tracker + Action Logging</span>
         <h1>CareerAgent</h1>
         <p className="hero-copy">
           CareerAgent is a customizable, human-in-the-loop AI job search assistant for importing jobs,
           checking whether saved job links still appear active, ranking them by fit and priority, and generating reviewable application packets
-          while keeping the user in control of every final application step.
+          while keeping the user in control of every final application step and tracked application outcome.
         </p>
         <p className="hero-copy">
-          Current Stage: Stage 6 — Application Packet Generation. Stages 1 through 5 are complete. Users still manually review and submit;
-          autofill assistance comes later.
+          Current Stage: Stage 7 — Tracker + Action Logging. CareerAgent now tracks the application workflow, still does not submit applications,
+          and Stage 8 will add browser autofill while stopping before submit.
         </p>
       </section>
 
@@ -87,20 +87,23 @@ export default async function HomePage() {
           <article className="workflow-step">
             <div className="workflow-heading">
               <h3>Track Outcome</h3>
-              <span className="planned-chip">Planned</span>
+              <span className="status-tag">Live now</span>
             </div>
             <p className="subtle">
-              Stage 7 will track application progress, follow-ups, and outcomes after manual submission.
+              Stage 7 now tracks application progress, follow-ups, packet views, and outcomes after manual submission.
             </p>
           </article>
         </div>
       </section>
 
       <section className="stats-grid">
-        <StatCard label="Jobs Found" value={market.jobs_found} hint="Saved PostgreSQL job records, including optional sample/demo rows if enabled." />
-        <StatCard label="Verified Jobs" value={market.verified_checked_jobs} hint="Jobs checked recently with Stage 4 verification." />
-        <StatCard label="Scored Jobs" value={market.scored_jobs_count} hint="Jobs scored against the current profile and base resume." />
-        <StatCard label="Packets Ready" value={market.packets_ready} hint="Jobs with at least one completed Stage 6 packet." />
+        <StatCard label="Jobs Found" value={tracker.total_jobs} hint="Saved PostgreSQL job records across the tracker workflow." />
+        <StatCard label="Packets Ready" value={tracker.packet_ready_count} hint="Jobs with a Stage 6 packet ready for review." />
+        <StatCard label="Applications Opened" value={tracker.application_opened_count} hint="Jobs whose application links were opened through CareerAgent." />
+        <StatCard label="Applied" value={tracker.applied_count} hint="Jobs the user manually submitted and marked applied." />
+        <StatCard label="Follow Ups" value={tracker.follow_up_count} hint="Jobs with a pending follow-up reminder in the app." />
+        <StatCard label="Interviews" value={tracker.interview_count} hint="Jobs that reached an interview or recruiter response stage." />
+        <StatCard label="Offers" value={tracker.offer_count} hint="Jobs that reached offer stage." />
         <StatCard label="Top Recommended Job" value={topPriorityLabel} hint={topPriorityHint} />
       </section>
 
@@ -117,16 +120,17 @@ export default async function HomePage() {
             <li>Stage 4 verification for one job or all saved jobs with evidence and status estimates.</li>
             <li>Stage 5 scoring for one job or all saved jobs with ranked recommendations.</li>
             <li>Stage 6 application packet generation with private packet folders and frontend previews.</li>
+            <li>Stage 7 tracker logging for application-link opens, notes, follow-ups, and manual outcomes.</li>
             <li>PostgreSQL-backed saved job records and detailed job pages.</li>
           </ul>
         </article>
 
         <article className="panel">
-          <h2>Current Stage 6</h2>
+          <h2>Current Stage 7</h2>
           <ul className="list">
-            <li>CareerAgent can now generate reviewable application packets for selected jobs.</li>
-            <li>Tailored resumes stay conservative and preserve the original LaTeX structure and style.</li>
+            <li>CareerAgent now tracks the application workflow after jobs are imported, verified, scored, and packeted.</li>
             <li>Users still manually review and submit every application.</li>
+            <li>Follow-ups, interviews, rejections, and offers are logged without automating submission.</li>
           </ul>
           <p className="subtle">{market.note}</p>
         </article>
@@ -134,7 +138,6 @@ export default async function HomePage() {
         <article className="panel">
           <h2>Coming Next</h2>
           <ul className="list">
-            <li>Stage 7: tracker logging for manual applications and follow-ups.</li>
             <li>Stage 8: browser autofill assistance with manual final submission only.</li>
             <li>Optional future AI providers for more advanced drafting, while keeping deterministic fallbacks.</li>
           </ul>

@@ -9,11 +9,11 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.application_event import ApplicationEvent
 from app.models.application_packet import ApplicationPacket
 from app.models.job import Job
 from app.services.profile.profile_store import load_profile_document
 from app.services.resume import compile_latex_file, generate_tailored_resume_source, load_resume_document
+from app.services.tracker import log_event, promote_job_status_if_needed
 
 from .application_notes import generate_application_notes
 from .application_questions import generate_application_question_answers
@@ -270,15 +270,32 @@ def generate_application_packet(db: Session, job_id: int, options: dict[str, Any
         files_created.append(packet_metadata_path)
         packet.packet_metadata_path = packet_metadata_path
 
-        job.application_status = "packet_ready"
-        db.add(
-            ApplicationEvent(
-                job_id=job.id,
-                event_type="packet_generated",
-                notes=f"Generated packet at {packet.packet_path}",
-            )
-        )
+        job.packet_generated_at = generated_at
+        db.add(job)
+        db.add(packet)
         db.commit()
+        db.refresh(packet)
+        db.refresh(job)
+
+        promote_job_status_if_needed(
+            db,
+            job.id,
+            "packet_ready",
+            notes="Generated an application packet for this job.",
+        )
+        log_event(
+            db,
+            job_id=job.id,
+            packet_id=packet.id,
+            event_type="packet_generated",
+            notes=f"Generated packet at {packet.packet_path}",
+            old_status=job.application_status,
+            new_status=job.application_status,
+            metadata_json={
+                "packet_path": packet.packet_path,
+                "generation_status": packet.generation_status,
+            },
+        )
         db.refresh(packet)
         db.refresh(job)
 

@@ -85,16 +85,21 @@ def get_market_summary(db: Session) -> dict:
         for packet in packets
         if packet.generation_status in {"completed", "completed_with_warnings"}
     }
+    applications_opened_count = sum(
+        1
+        for job in jobs
+        if job.application_status in {"application_opened", "autofill_started", "autofill_completed"}
+    )
 
-    note = "Market analytics are still a later-stage feature. Stage 6 now adds basic scoring, recommendation, verification, and packet-generation summaries."
+    note = "Market analytics are still a later-stage feature. Stage 7 now adds tracker-aware summaries alongside verification, scoring, and packet generation."
     if sample_job_count:
         note += f" {sample_job_count} saved jobs are optional sample/demo records."
 
     return {
-        "status": "stage6_summary",
+        "status": "stage7_summary",
         "jobs_found": jobs_found,
         "total_jobs": jobs_found,
-        "applications_opened": 0,
+        "applications_opened": applications_opened_count,
         "packets_ready": len(ready_packet_job_ids),
         "verified_open_jobs": verification_counts["open"] + verification_counts["probably_open"],
         "verified_checked_jobs": checked_recently_count,

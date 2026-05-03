@@ -357,9 +357,33 @@ tr:last-child td {
 }
 
 .status-packet-ready,
+.status-verified-open,
+.status-saved,
+.status-application-opened,
+.status-autofill-started,
+.status-autofill-completed,
 .status-completed {
   background: rgba(15, 118, 110, 0.14);
   color: #0f766e;
+}
+
+.status-applied-manual,
+.status-follow-up,
+.status-interview {
+  background: rgba(29, 78, 216, 0.12);
+  color: #1d4ed8;
+}
+
+.status-offer {
+  background: rgba(72, 187, 120, 0.18);
+  color: #1f7a43;
+}
+
+.status-rejected,
+.status-withdrawn,
+.status-closed-before-apply {
+  background: rgba(138, 59, 18, 0.16);
+  color: var(--warning);
 }
 
 .status-generating {
@@ -577,6 +601,34 @@ details summary {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.filter-row,
+.tracker-columns {
+  display: grid;
+  gap: 16px;
+}
+
+.tracker-columns {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.tracker-job-list,
+.timeline-list {
+  display: grid;
+  gap: 14px;
+}
+
+.tracker-job-card,
+.timeline-item {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.compact-key-value {
+  grid-template-columns: 100px 1fr;
 }
 
 @media (max-width: 720px) {

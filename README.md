@@ -19,7 +19,7 @@ CareerAgent must never invent experience, skills, credentials, companies, dates,
 
 ## Current Stage
 
-**Stage 6 — Application Packet Generation**
+**Stage 7 — Tracker + Action Logging**
 
 - Stage 1: Complete
 - Stage 2: Complete
@@ -27,12 +27,13 @@ CareerAgent must never invent experience, skills, credentials, companies, dates,
 - Stage 4: Complete
 - Stage 5: Complete
 - Stage 6: Complete
+- Stage 7: Complete
 
-Next Stage: **Stage 7 — Tracker + Action Logging**
+Next Stage: **Stage 8 — Browser Autofill with Playwright**
 
-Stage 6 adds real per-job packet generation, packet records in PostgreSQL, packet detail pages in the frontend, conservative LaTeX resume tailoring, and graceful optional PDF compilation when a LaTeX compiler is available.
+Stage 7 adds application tracking, timeline logging, manual outcome updates, follow-up reminders inside the app, tracker summary APIs, and tracker-aware UI pages on top of the completed Stage 6 packet workflow.
 
-## Stage 6 Features
+## Stage 7 Features
 
 - Generate a private per-job packet folder under `outputs/application_packets/`.
 - Generate `tailored_resume.tex` by minimally editing the source LaTeX resume while preserving structure and style.
@@ -46,6 +47,15 @@ Stage 6 adds real per-job packet generation, packet records in PostgreSQL, packe
 - Generate `packet_metadata.json`.
 - Save packet records in PostgreSQL with generation status, timestamps, file paths, and graceful error details.
 - Show packets in the frontend on `/packets`, `/packets/{id}`, and the job detail page.
+- Track application statuses such as `saved`, `packet_ready`, `application_opened`, `applied_manual`, `follow_up`, `interview`, `rejected`, `offer`, `withdrawn`, and `closed_before_apply`.
+- Log application events with timestamps, notes, and optional status transitions.
+- Track when a packet is generated or viewed.
+- Track when an application link is opened through CareerAgent.
+- Let the user manually mark jobs as applied, interview, rejected, offer, withdrawn, or closed before applying.
+- Let the user add notes and follow-up reminders to job records.
+- Show a real Tracker page with grouped statuses, summary cards, upcoming follow-ups, and recent activity.
+- Show per-job timeline history on the job detail page.
+- Update dashboard stats from tracker data.
 - Keep Stage 1 through Stage 5 features intact, including profile editing, resume editing, import, verification, scoring, and ranked recommendations.
 - Keep generated outputs private and gitignored.
 
@@ -75,7 +85,7 @@ CareerAgent is being built toward a custom AI agent workflow, not just a set of 
 10. The user manually reviews and submits.
 11. CareerAgent tracks the application and follow-up status.
 
-At the end of this Stage 6 pass, setup, import, parsing, saved-job persistence, rule-based verification, rule-based scoring, and packet generation are implemented. Browser autofill and full tracker logging are still future stages.
+At the end of this Stage 7 pass, setup, import, parsing, saved-job persistence, rule-based verification, rule-based scoring, packet generation, tracker logging, manual application status updates, and follow-up tracking are implemented. Browser autofill is still a future stage.
 
 ## Tech Stack
 
@@ -131,7 +141,7 @@ If `data/profile.yaml` or `data/resume/base_resume.tex` do not exist yet, the ap
 
 If LaTeX is not installed, the resume compile endpoint stays available and returns a clear message instead of crashing the backend.
 
-If you are upgrading from an older local database, CareerAgent adds the Stage 3 through Stage 6 job and packet columns automatically on startup. If you want a clean local reset instead, run:
+If you are upgrading from an older local database, CareerAgent adds the Stage 3 through Stage 7 job, packet, and tracker columns automatically on startup. If you want a clean local reset instead, run:
 
 ```bash
 docker compose down -v
@@ -218,7 +228,7 @@ Only the example/template files should appear as tracked private-data matches. I
 
 CareerAgent should preserve the user’s original LaTeX resume structure, section order, commands, formatting, spacing, fonts, margins, and visual style. Tailoring should be content-only unless the user explicitly asks for design changes. Tailored resumes should be made by minimally editing `base_resume.tex`, not by replacing it with a new template.
 
-## Stage 3, Stage 4, Stage 5, and Stage 6 Usage
+## Stage 3, Stage 4, Stage 5, Stage 6, and Stage 7 Usage
 
 ### Job import workflow
 
@@ -262,7 +272,19 @@ CareerAgent should preserve the user’s original LaTeX resume structure, sectio
 9. Open `/packets/{id}` to preview the generated files.
 10. Manually review and use the packet when applying.
 
-### Stage 6 limitations
+### Stage 7 tracker workflow
+
+1. Import jobs.
+2. Verify and score them.
+3. Generate a packet for a job when you want application materials ready.
+4. Open the job detail page or `/tracker`.
+5. Use `Open Application` through CareerAgent so the app logs the application-link-opened event first.
+6. Manually apply on the company site.
+7. Return to CareerAgent and click `Mark Applied`.
+8. Add notes or set follow-up reminders as needed.
+9. Update the status again when an interview, rejection, offer, withdrawal, or closed-before-apply outcome happens.
+
+### Stage 7 limitations
 
 - URL parsing is basic and may not work on JavaScript-heavy job pages.
 - Verification is rule-based and approximate.
@@ -281,10 +303,15 @@ CareerAgent should preserve the user’s original LaTeX resume structure, sectio
 - Browser-based extraction and browser-based verification may be added later.
 - A job can look open while still being closed behind a login wall or deeper ATS flow.
 - User review is still required before trusting any recommendation or generated packet asset.
+- CareerAgent does not submit applications.
+- The user must manually mark a job as applied.
+- Follow-up reminders are tracked in the app but are not scheduled notifications yet.
+- Calendar and email integrations are still future improvements.
+- Browser autofill is still Stage 8 and will still stop before final submission.
 - AI-assisted parsing is Stage 10.
 - Some parsed, verified, and scored fields will be imperfect because CareerAgent currently uses deterministic rule-based parsing, verification, and scoring instead of AI or browser automation.
 
-## What Works In Stage 6
+## What Works In Stage 7
 
 - `GET /health`
 - `GET /api/market/summary`
@@ -324,7 +351,16 @@ CareerAgent should preserve the user’s original LaTeX resume structure, sectio
 - `GET /api/packets/{id}/file?file_key=tailored_resume_tex`
 - `GET /api/packets/{id}/file?file_key=job_summary`
 - `GET /api/packets/{id}/file?file_key=packet_metadata`
-- Real Stage 6 pages for jobs, packets, and packet detail
+- `GET /api/tracker/summary`
+- `GET /api/tracker/jobs`
+- `GET /api/tracker/jobs/{job_id}/timeline`
+- `POST /api/tracker/jobs/{job_id}/status`
+- `POST /api/tracker/jobs/{job_id}/note`
+- `POST /api/tracker/jobs/{job_id}/follow-up`
+- `POST /api/tracker/jobs/{job_id}/follow-up/complete`
+- `POST /api/tracker/jobs/{job_id}/open-application`
+- `GET /api/tracker/events`
+- Real Stage 7 pages for jobs, tracker, packets, packet detail, and job timelines
 
 ## Project Structure
 
@@ -432,8 +468,10 @@ careeragent/
 
 ### Stage 7: Tracker + Action Logging
 
+- Status: Complete
 - Track saved jobs, verified jobs, packet-ready jobs, application link opened, autofill started, autofill completed, manually applied, interview, rejected, offer, follow-up.
-- Track clicks and timestamps.
+- Track clicks, notes, and timestamps.
+- Show a real Tracker page and per-job timelines.
 
 ### Stage 8: Browser Autofill with Playwright
 
@@ -469,14 +507,14 @@ careeragent/
 
 ## Next Stage
 
-**Next Stage: Stage 7 — Tracker + Action Logging**
+**Next Stage: Stage 8 — Browser Autofill with Playwright**
 
-Stage 7 should:
+Stage 8 should:
 
-- record manual application actions and timestamps
-- track packet-ready, applied, interview, follow-up, rejection, and offer states
-- make it easy to mark a job as manually applied after the user submits it themselves
-- add basic follow-up reminders and action history
+- open the application page in Chromium
+- fill safe high-confidence fields and upload the right files
+- stop before any final submit action
+- log autofill start and completion events into the Stage 7 tracker
 - preserve the no-auto-submit safety boundary
 
 ## Planned Improvements

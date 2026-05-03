@@ -58,6 +58,18 @@ class Job(Base):
     scoring_raw_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     scored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     application_status: Mapped[str] = mapped_column(String(50), default="found", nullable=False)
+    application_link_opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    packet_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    follow_up_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    interview_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    offer_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_before_apply_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    user_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_action_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

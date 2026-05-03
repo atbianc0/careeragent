@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 from app.models.job import Job
 from app.services.scoring.scoring import calculate_priority_score, freshness_score_value
 
+SAMPLE_JOB_SOURCE = "sample_seed"
+
 
 def _today() -> date:
     return date.today()
@@ -60,7 +62,7 @@ def create_job(db: Session, parsed_job: dict[str, Any]) -> Job:
     payload.setdefault("last_verification_error", None)
     payload.setdefault("first_seen_date", today)
     payload.setdefault("last_seen_date", today)
-    payload.setdefault("application_status", "found")
+    payload.setdefault("application_status", "saved" if payload.get("source") != SAMPLE_JOB_SOURCE else "found")
     payload.setdefault("verification_status", "unknown")
     payload.setdefault("verification_score", 0.0)
     payload.setdefault("likely_closed_score", 0.0)

@@ -35,3 +35,4 @@ class ApplicationPacket(Base):
     )
 
     job = relationship("Job", back_populates="packets")
+    events = relationship("ApplicationEvent", back_populates="packet")

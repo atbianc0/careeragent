@@ -10,6 +10,22 @@ engine = create_engine(settings.database_url, future=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, future=True)
 Base = declarative_base()
 SAMPLE_JOB_SOURCE = "sample_seed"
+VALID_APPLICATION_STATUSES = {
+    "found",
+    "saved",
+    "verified_open",
+    "packet_ready",
+    "application_opened",
+    "autofill_started",
+    "autofill_completed",
+    "applied_manual",
+    "follow_up",
+    "interview",
+    "rejected",
+    "offer",
+    "withdrawn",
+    "closed_before_apply",
+}
 STATIC_SAMPLE_FIELDS = [
     "company",
     "title",
@@ -58,6 +74,18 @@ JOB_COLUMN_DEFINITIONS = {
     "scoring_evidence": "JSON",
     "scoring_raw_data": "JSON",
     "scored_at": "TIMESTAMP WITH TIME ZONE",
+    "application_link_opened_at": "TIMESTAMP WITH TIME ZONE",
+    "packet_generated_at": "TIMESTAMP WITH TIME ZONE",
+    "applied_at": "TIMESTAMP WITH TIME ZONE",
+    "follow_up_at": "TIMESTAMP WITH TIME ZONE",
+    "interview_at": "TIMESTAMP WITH TIME ZONE",
+    "rejected_at": "TIMESTAMP WITH TIME ZONE",
+    "offer_at": "TIMESTAMP WITH TIME ZONE",
+    "withdrawn_at": "TIMESTAMP WITH TIME ZONE",
+    "closed_before_apply_at": "TIMESTAMP WITH TIME ZONE",
+    "user_notes": "TEXT",
+    "next_action": "TEXT",
+    "next_action_due_at": "TIMESTAMP WITH TIME ZONE",
 }
 APPLICATION_PACKET_COLUMN_DEFINITIONS = {
     "cover_letter_pdf_path": "VARCHAR(500)",
@@ -67,6 +95,13 @@ APPLICATION_PACKET_COLUMN_DEFINITIONS = {
     "generation_error": "TEXT",
     "generated_at": "TIMESTAMP WITH TIME ZONE",
     "updated_at": "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP",
+}
+APPLICATION_EVENT_COLUMN_DEFINITIONS = {
+    "packet_id": "INTEGER",
+    "old_status": "VARCHAR(50)",
+    "new_status": "VARCHAR(50)",
+    "metadata_json": "JSON",
+    "created_at": "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP",
 }
 
 
@@ -84,8 +119,10 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _sync_job_columns()
     _sync_application_packet_columns()
+    _sync_application_event_columns()
     backfill_job_defaults()
     backfill_application_packet_defaults()
+    backfill_application_event_defaults()
     normalize_sample_jobs()
 
 
@@ -125,6 +162,33 @@ def _sync_application_packet_columns() -> None:
     with engine.begin() as connection:
         for column_name, column_type in missing_columns.items():
             connection.execute(text(f"ALTER TABLE application_packets ADD COLUMN {column_name} {column_type}"))
+
+
+def _sync_application_event_columns() -> None:
+    inspector = inspect(engine)
+    if "application_events" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("application_events")}
+    missing_columns = {
+        column_name: column_type
+        for column_name, column_type in APPLICATION_EVENT_COLUMN_DEFINITIONS.items()
+        if column_name not in existing_columns
+    }
+
+    with engine.begin() as connection:
+        for column_name, column_type in missing_columns.items():
+            connection.execute(text(f"ALTER TABLE application_events ADD COLUMN {column_name} {column_type}"))
+
+        if "packet_id" in missing_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE application_events "
+                    "ADD CONSTRAINT application_events_packet_id_fkey "
+                    "FOREIGN KEY (packet_id) REFERENCES application_packets(id)"
+                )
+            )
+        connection.execute(text("ALTER TABLE application_events ALTER COLUMN notes DROP NOT NULL"))
 
 
 def backfill_job_defaults() -> None:
@@ -188,6 +252,10 @@ def backfill_job_defaults() -> None:
                 job.scoring_raw_data = {}
             if job.application_status is None:
                 job.application_status = "found"
+            elif job.application_status not in VALID_APPLICATION_STATUSES:
+                job.application_status = "saved" if job.source != SAMPLE_JOB_SOURCE else "found"
+            elif job.application_status == "found" and job.source != SAMPLE_JOB_SOURCE:
+                job.application_status = "saved"
 
             job.freshness_score = calculate_freshness_score(job.posted_date, job.first_seen_date)
             job.overall_priority_score = calculate_priority_score(
@@ -229,6 +297,24 @@ def backfill_application_packet_defaults() -> None:
                 packet.generated_at = packet.created_at
             if packet.updated_at is None and packet.created_at is not None:
                 packet.updated_at = packet.created_at
+
+        db.commit()
+    finally:
+        db.close()
+
+
+def backfill_application_event_defaults() -> None:
+    from app.models.application_event import ApplicationEvent
+
+    db: Session = SessionLocal()
+    try:
+        events = db.query(ApplicationEvent).all()
+        if not events:
+            return
+
+        for event in events:
+            if event.created_at is None and event.event_time is not None:
+                event.created_at = event.event_time
 
         db.commit()
     finally:

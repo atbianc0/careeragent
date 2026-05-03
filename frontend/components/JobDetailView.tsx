@@ -3,7 +3,17 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { ApplicationPacket, Job, generatePacket, getPacketsForJob, scoreJob, verifyJob } from "@/lib/api";
+import { TrackingActions } from "@/components/TrackingActions";
+import {
+  ApplicationEvent,
+  ApplicationPacket,
+  Job,
+  generatePacket,
+  getJobTimeline,
+  getPacketsForJob,
+  scoreJob,
+  verifyJob,
+} from "@/lib/api";
 
 type JobDetailViewProps = {
   initialJob: Job;
@@ -91,6 +101,13 @@ function formatDateTime(value: string | null) {
   return parsed.toLocaleString();
 }
 
+function formatTimelineEvent(event: ApplicationEvent) {
+  if (event.old_status && event.new_status && event.old_status !== event.new_status) {
+    return `${event.event_type} (${event.old_status} → ${event.new_status})`;
+  }
+  return event.event_type;
+}
+
 export function JobDetailView({ initialJob }: JobDetailViewProps) {
   const [job, setJob] = useState<Job>(initialJob);
   const [verifying, setVerifying] = useState(false);
@@ -106,12 +123,15 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
     include_application_questions: true,
     compile_resume_pdf: true,
   });
+  const [timeline, setTimeline] = useState<ApplicationEvent[]>([]);
+  const [loadingTimeline, setLoadingTimeline] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const latestPacket = packets[0] || null;
 
   useEffect(() => {
     void loadPackets();
+    void loadTimeline();
   }, [job.id]);
 
   async function loadPackets() {
@@ -124,6 +144,19 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
       setPacketError(loadError instanceof Error ? loadError.message : "Failed to load packets for this job.");
     } finally {
       setLoadingPackets(false);
+    }
+  }
+
+  async function loadTimeline() {
+    setLoadingTimeline(true);
+    try {
+      const response = await getJobTimeline(job.id);
+      setTimeline(response);
+      setError(null);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Failed to load the job timeline.");
+    } finally {
+      setLoadingTimeline(false);
     }
   }
 
@@ -140,6 +173,7 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
     try {
       const response = await verifyJob(job.id);
       setJob(response.job);
+      await loadTimeline();
       setMessage(
         `Verification updated: ${response.verification.verification_status} (${response.verification.verification_score}/100).`,
       );
@@ -158,6 +192,7 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
     try {
       const response = await scoreJob(job.id);
       setJob(response.job);
+      await loadTimeline();
       setMessage(
         `Scoring updated: resume match ${response.score.resume_match_score}/100, priority ${response.score.overall_priority_score}/100.`,
       );
@@ -179,7 +214,7 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
         ...packetOptions,
       });
       setJob(response.job);
-      await loadPackets();
+      await Promise.all([loadPackets(), loadTimeline()]);
 
       if (response.compile_resume_pdf_requested && !response.compile_resume_pdf_success) {
         setPacketMessage(`${response.message} The rest of the packet was created, but the resume PDF is unavailable right now.`);
@@ -200,6 +235,11 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
     }));
   }
 
+  function handleTrackedJobUpdated(updatedJob: Job) {
+    setJob(updatedJob);
+    void Promise.all([loadPackets(), loadTimeline()]);
+  }
+
   return (
     <div className="page">
       <section className="hero">
@@ -216,17 +256,15 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
           <Link href="/jobs" className="button secondary">
             Back to Jobs
           </Link>
+          <Link href="/tracker" className="button secondary">
+            Open Tracker
+          </Link>
           <button className="button secondary" type="button" onClick={handleVerify} disabled={verifying || !job.url.trim()}>
             {verifying ? "Verifying..." : "Verify This Job"}
           </button>
           <button className="button" type="button" onClick={handleScore} disabled={scoring}>
             {scoring ? "Scoring..." : "Score This Job"}
           </button>
-          {job.url ? (
-            <a href={job.url} target="_blank" rel="noreferrer" className="button secondary">
-              Open Original Job URL
-            </a>
-          ) : null}
         </div>
         {message ? <p className="message success">{message}</p> : null}
         {error ? <p className="message error">{error}</p> : null}
@@ -358,13 +396,54 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
         </article>
 
         <article className="panel">
-          <h2>Future Actions</h2>
+          <h2>Tracking</h2>
+          <p className="subtle">
+            Stage 7 tracks the application workflow. Open application links through CareerAgent to log the action, then
+            manually review and manually submit on the company site.
+          </p>
+          <dl className="key-value">
+            <dt>Current Status</dt>
+            <dd>
+              <span className={getStatusClassName(job.application_status)}>{job.application_status}</span>
+            </dd>
+            <dt>Application Opened</dt>
+            <dd>{formatDateTime(job.application_link_opened_at)}</dd>
+            <dt>Packet Generated</dt>
+            <dd>{formatDateTime(job.packet_generated_at)}</dd>
+            <dt>Applied At</dt>
+            <dd>{formatDateTime(job.applied_at)}</dd>
+            <dt>Follow Up At</dt>
+            <dd>{formatDateTime(job.follow_up_at)}</dd>
+            <dt>Interview At</dt>
+            <dd>{formatDateTime(job.interview_at)}</dd>
+            <dt>Rejected At</dt>
+            <dd>{formatDateTime(job.rejected_at)}</dd>
+            <dt>Offer At</dt>
+            <dd>{formatDateTime(job.offer_at)}</dd>
+            <dt>Next Action</dt>
+            <dd>{job.next_action || "None"}</dd>
+            <dt>Next Action Due</dt>
+            <dd>{formatDateTime(job.next_action_due_at)}</dd>
+          </dl>
+          {job.user_notes ? (
+            <details className="details-block">
+              <summary>Saved Notes</summary>
+              <pre className="code-block">{job.user_notes}</pre>
+            </details>
+          ) : (
+            <p className="subtle">No user notes saved yet.</p>
+          )}
+          <TrackingActions
+            job={job}
+            showClosedBeforeApply
+            showCompleteFollowUp
+            onJobUpdated={handleTrackedJobUpdated}
+            onMessage={setMessage}
+            onError={setError}
+          />
           <div className="planned-action-stack">
-            <span className={job.application_status === "packet_ready" ? "status-tag status-packet-ready" : "status-tag status-open"}>
-              {job.application_status === "packet_ready" ? "Application Packet Ready — Stage 6 live" : "Generate Application Packet — Stage 6 live"}
-            </span>
-            <span className="planned-chip">Track Application — planned Stage 7</span>
-            <span className="planned-chip">Autofill Application — planned Stage 8</span>
+            <span className="status-tag status-open">Tracker logging: Stage 7 live</span>
+            <span className="planned-chip">Autofill Application: planned Stage 8</span>
           </div>
         </article>
 
@@ -418,9 +497,6 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
             ) : null}
             <button className="button secondary" type="button" disabled>
               Open Autofill — Planned Stage 8
-            </button>
-            <button className="button secondary" type="button" disabled>
-              Mark Applied — Planned Stage 7
             </button>
           </div>
           <p className="subtle">Review all generated materials manually before using them.</p>
@@ -507,6 +583,28 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
           <h2>Application Questions</h2>
           {renderItems(job.application_questions)}
         </article>
+      </section>
+
+      <section className="panel">
+        <div className="section-title">
+          <h2>Timeline</h2>
+          <span className="subtle">{loadingTimeline ? "Loading..." : `${timeline.length} events`}</span>
+        </div>
+        {loadingTimeline ? (
+          <p className="subtle">Loading timeline...</p>
+        ) : timeline.length > 0 ? (
+          <div className="timeline-list">
+            {timeline.map((event) => (
+              <article className="timeline-item" key={event.id}>
+                <strong>{formatTimelineEvent(event)}</strong>
+                <p className="subtle">{formatDateTime(event.event_time)}</p>
+                {event.notes ? <p className="subtle">{event.notes}</p> : null}
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="subtle">No tracker activity has been recorded for this job yet.</p>
+        )}
       </section>
 
       <section className="panel">

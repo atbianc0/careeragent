@@ -3,11 +3,15 @@
 import Link from "next/link";
 
 import { Job } from "@/lib/api";
+import { TrackingActions } from "@/components/TrackingActions";
 
 type JobTableProps = {
   jobs: Job[];
   onVerify?: (job: Job) => Promise<void> | void;
   onScore?: (job: Job) => Promise<void> | void;
+  onJobUpdated?: (job: Job) => void;
+  onTrackerMessage?: (message: string | null) => void;
+  onTrackerError?: (message: string | null) => void;
   verifyingJobId?: number | null;
   scoringJobId?: number | null;
 };
@@ -31,7 +35,16 @@ function getStatusClassName(status: string) {
   return `status-tag status-${status.replace(/_/g, "-")}`;
 }
 
-export function JobTable({ jobs, onVerify, onScore, verifyingJobId, scoringJobId }: JobTableProps) {
+export function JobTable({
+  jobs,
+  onVerify,
+  onScore,
+  onJobUpdated,
+  onTrackerMessage,
+  onTrackerError,
+  verifyingJobId,
+  scoringJobId,
+}: JobTableProps) {
   if (jobs.length === 0) {
     return <p className="subtle">No jobs saved yet. Import a pasted description or URL to create your first record.</p>;
   }
@@ -101,7 +114,10 @@ export function JobTable({ jobs, onVerify, onScore, verifyingJobId, scoringJobId
                   </div>
                 </td>
                 <td>
-                  <span className={getStatusClassName(job.application_status)}>{job.application_status}</span>
+                  <div className="status-stack">
+                    <span className={getStatusClassName(job.application_status)}>{job.application_status}</span>
+                    {job.follow_up_at ? <span className="subtle">Follow up: {formatDate(job.follow_up_at)}</span> : null}
+                  </div>
                 </td>
                 <td>{formatSource(job.source)}</td>
                 <td>
@@ -126,7 +142,17 @@ export function JobTable({ jobs, onVerify, onScore, verifyingJobId, scoringJobId
                     >
                       {scoring ? "Scoring..." : "Score"}
                     </button>
+                    <Link href="/tracker" className="button secondary compact">
+                      Tracker
+                    </Link>
                   </div>
+                  <TrackingActions
+                    job={job}
+                    compact
+                    onJobUpdated={onJobUpdated}
+                    onMessage={onTrackerMessage}
+                    onError={onTrackerError}
+                  />
                 </td>
                 <td>
                   <div className="planned-action-stack">
@@ -135,6 +161,7 @@ export function JobTable({ jobs, onVerify, onScore, verifyingJobId, scoringJobId
                     <span className={job.application_status === "packet_ready" ? "status-tag status-packet-ready" : "status-tag status-open"}>
                       {job.application_status === "packet_ready" ? "Packet ready: Stage 6 live" : "Generate packet: Stage 6 live"}
                     </span>
+                    <span className="status-tag status-open">Tracker logging: Stage 7 live</span>
                     <span className="planned-chip">Autofill application: planned Stage 8</span>
                   </div>
                 </td>

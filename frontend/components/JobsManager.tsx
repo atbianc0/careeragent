@@ -248,6 +248,10 @@ export function JobsManager() {
     }
   }
 
+  function handleTrackedJobUpdated(updatedJob: Job) {
+    setJobs((currentJobs) => currentJobs.map((job) => (job.id === updatedJob.id ? updatedJob : job)));
+  }
+
   return (
     <div className="page">
       <section className="panel">
@@ -473,7 +477,8 @@ export function JobsManager() {
           <span className="subtle">{loading ? "Loading..." : `${jobs.length} jobs`}</span>
         </div>
         <p className="subtle">
-          Verify jobs first to estimate availability, then score them against the profile and resume to prioritize which ones to apply to first.
+          Verify jobs first to estimate availability, score them against the profile and resume, then use Stage 7 tracking actions
+          to open application links, mark manual submissions, and schedule follow-ups.
         </p>
         <div className="button-row">
           <button
@@ -546,6 +551,9 @@ export function JobsManager() {
             jobs={jobs}
             onVerify={handleVerifyJob}
             onScore={handleScoreJob}
+            onJobUpdated={handleTrackedJobUpdated}
+            onTrackerMessage={setMessage}
+            onTrackerError={setError}
             verifyingJobId={verifyingJobId}
             scoringJobId={scoringJobId}
           />

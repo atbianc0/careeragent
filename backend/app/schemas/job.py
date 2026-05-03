@@ -56,6 +56,18 @@ class JobBase(FlexibleJobModel):
     scoring_raw_data: dict[str, Any] = Field(default_factory=dict)
     scored_at: datetime | None = None
     application_status: str = "found"
+    application_link_opened_at: datetime | None = None
+    packet_generated_at: datetime | None = None
+    applied_at: datetime | None = None
+    follow_up_at: datetime | None = None
+    interview_at: datetime | None = None
+    rejected_at: datetime | None = None
+    offer_at: datetime | None = None
+    withdrawn_at: datetime | None = None
+    closed_before_apply_at: datetime | None = None
+    user_notes: str | None = None
+    next_action: str | None = None
+    next_action_due_at: datetime | None = None
 
     @field_validator(
         "required_skills",
@@ -129,6 +141,18 @@ class JobUpdate(FlexibleJobModel):
     scoring_raw_data: dict[str, Any] | None = None
     scored_at: datetime | None = None
     application_status: str | None = None
+    application_link_opened_at: datetime | None = None
+    packet_generated_at: datetime | None = None
+    applied_at: datetime | None = None
+    follow_up_at: datetime | None = None
+    interview_at: datetime | None = None
+    rejected_at: datetime | None = None
+    offer_at: datetime | None = None
+    withdrawn_at: datetime | None = None
+    closed_before_apply_at: datetime | None = None
+    user_notes: str | None = None
+    next_action: str | None = None
+    next_action_due_at: datetime | None = None
 
 
 class JobRead(JobBase):
