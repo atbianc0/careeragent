@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -16,10 +16,22 @@ class ApplicationPacket(Base):
     tailored_resume_tex_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     tailored_resume_pdf_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     cover_letter_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    cover_letter_pdf_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     recruiter_message_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     application_questions_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     application_notes_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     change_summary_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    job_summary_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    packet_metadata_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    generation_status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)
+    generation_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
 
     job = relationship("Job", back_populates="packets")

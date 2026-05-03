@@ -6,11 +6,11 @@ export default async function AutofillPage() {
   return (
     <div className="page">
       <section className="hero">
-        <span className="eyebrow">Autofill Safety Boundary</span>
+        <span className="eyebrow">Planned for Stage 8 - Browser Autofill with Playwright</span>
         <h1>Autofill</h1>
         <p className="hero-copy">
           Autofill is planned for a later stage. CareerAgent may fill forms in Chromium later,
-          but the user will always review the result manually before submitting.
+          but it will never auto-submit and the user will always review the result manually before submitting.
         </p>
       </section>
 
@@ -32,4 +32,3 @@ export default async function AutofillPage() {
     </div>
   );
 }
-

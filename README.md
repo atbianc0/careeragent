@@ -19,23 +19,35 @@ CareerAgent must never invent experience, skills, credentials, companies, dates,
 
 ## Current Stage
 
-**Stage 2 — Profile + LaTeX Resume System**
+**Stage 6 — Application Packet Generation**
 
 - Stage 1: Complete
-- Stage 2: Complete after this audit
+- Stage 2: Complete
+- Stage 3: Complete
+- Stage 4: Complete
+- Stage 5: Complete
+- Stage 6: Complete
 
-Stage 2 adds editable YAML profile management, editable LaTeX resume management, safe private-file creation from committed examples, and optional PDF compilation when a LaTeX compiler is installed.
+Next Stage: **Stage 7 — Tracker + Action Logging**
 
-## Stage 2 Features
+Stage 6 adds real per-job packet generation, packet records in PostgreSQL, packet detail pages in the frontend, conservative LaTeX resume tailoring, and graceful optional PDF compilation when a LaTeX compiler is available.
 
-- Profile loading from YAML with private-first fallback behavior.
-- Private profile creation from the public-safe example template.
-- Profile editing and saving from the frontend to `data/profile.yaml`.
-- Resume loading from LaTeX with private-first fallback behavior.
-- Private resume creation from the public-safe example template.
-- Resume editing and saving from the frontend to `data/resume/base_resume.tex`.
-- Optional LaTeX PDF compilation with `xelatex` preferred and `pdflatex` as fallback.
-- GitHub-safe private file workflow with ignored local files and committed example templates only.
+## Stage 6 Features
+
+- Generate a private per-job packet folder under `outputs/application_packets/`.
+- Generate `tailored_resume.tex` by minimally editing the source LaTeX resume while preserving structure and style.
+- Attempt `tailored_resume.pdf` compilation when `xelatex` or `pdflatex` is available.
+- Generate `cover_letter.md`.
+- Generate `recruiter_message.md`.
+- Generate `application_questions.md`.
+- Generate `application_notes.md`.
+- Generate `change_summary.md`.
+- Generate `job_summary.json`.
+- Generate `packet_metadata.json`.
+- Save packet records in PostgreSQL with generation status, timestamps, file paths, and graceful error details.
+- Show packets in the frontend on `/packets`, `/packets/{id}`, and the job detail page.
+- Keep Stage 1 through Stage 5 features intact, including profile editing, resume editing, import, verification, scoring, and ranked recommendations.
+- Keep generated outputs private and gitignored.
 
 ## Core Safety Principles
 
@@ -46,6 +58,24 @@ Stage 2 adds editable YAML profile management, editable LaTeX resume management,
 - The user always manually reviews and manually submits.
 - CareerAgent should never invent experience, achievements, credentials, or answers.
 - The app should never log secrets or print full personal profile information unnecessarily.
+
+## Target Agent Workflow
+
+CareerAgent is being built toward a custom AI agent workflow, not just a set of separate tools. The intended end-to-end flow is:
+
+1. The user uploads or creates their profile, resume, preferences, links, and application defaults once.
+2. CareerAgent finds or imports relevant jobs.
+3. CareerAgent verifies whether jobs are still hiring.
+4. CareerAgent scores jobs by fit, freshness, availability, and application priority.
+5. CareerAgent recommends the best jobs to apply to first.
+6. The user reviews a recommended job.
+7. CareerAgent generates a tailored application packet while preserving the user’s original resume structure and style.
+8. The user clicks an autofill or apply-assist action.
+9. CareerAgent opens the application page in Chromium, fills safe fields, uploads the correct files, drafts answers in the user’s writing style, and stops before final submission.
+10. The user manually reviews and submits.
+11. CareerAgent tracks the application and follow-up status.
+
+At the end of this Stage 6 pass, setup, import, parsing, saved-job persistence, rule-based verification, rule-based scoring, and packet generation are implemented. Browser autofill and full tracker logging are still future stages.
 
 ## Tech Stack
 
@@ -65,25 +95,31 @@ Stage 2 adds editable YAML profile management, editable LaTeX resume management,
 cp .env.example .env
 ```
 
-2. Copy the safe public profile template to your private local profile file:
+2. Optional: if you want demo/sample jobs in an empty local database, set this in `.env`:
+
+```bash
+ENABLE_SAMPLE_JOBS=true
+```
+
+3. Copy the safe public profile template to your private local profile file:
 
 ```bash
 cp data/profile.example.yaml data/profile.yaml
 ```
 
-3. Copy the safe public resume template to your private local resume file:
+4. Copy the safe public resume template to your private local resume file:
 
 ```bash
 cp data/resume/base_resume.example.tex data/resume/base_resume.tex
 ```
 
-4. Start the stack:
+5. Start the stack:
 
 ```bash
 docker compose up --build
 ```
 
-5. Open:
+6. Open:
 
 - Frontend: [http://localhost:3000](http://localhost:3000)
 - Profile page: [http://localhost:3000/profile](http://localhost:3000/profile)
@@ -95,13 +131,32 @@ If `data/profile.yaml` or `data/resume/base_resume.tex` do not exist yet, the ap
 
 If LaTeX is not installed, the resume compile endpoint stays available and returns a clear message instead of crashing the backend.
 
+If you are upgrading from an older local database, CareerAgent adds the Stage 3 through Stage 6 job and packet columns automatically on startup. If you want a clean local reset instead, run:
+
+```bash
+docker compose down -v
+docker compose up --build
+```
+
 ## Public GitHub Safety
 
 - Real profile info should go in `data/profile.yaml`, which is gitignored.
 - Real resume content should go in `data/resume/base_resume.tex`, which is gitignored.
 - API keys, tokens, and secrets should go in `.env`, which is gitignored.
 - Generated application packets and generated PDFs are private and ignored under `outputs/`.
-- Only `.env.example`, `data/profile.example.yaml`, and `data/resume/base_resume.example.tex` should be committed.
+- Allowed committed template files:
+  - `.env.example`
+  - `data/profile.example.yaml`
+  - `data/resume/base_resume.example.tex`
+- Never commit:
+  - `.env`
+  - `data/profile.yaml`
+  - `data/resume/base_resume.tex`
+  - `outputs/`
+  - generated PDFs
+  - generated application packets
+  - API keys or tokens
+  - real personal resume/profile data
 - The app should never require private local files to be committed in order to run.
 
 Helpful setup commands:
@@ -159,9 +214,81 @@ Only the example/template files should appear as tracked private-data matches. I
 5. Use `Compile PDF` to generate a PDF when `xelatex` or `pdflatex` is available.
 6. Compiled PDFs are written under `outputs/resume/`, which is gitignored.
 
-## What Works In Stage 2
+## Resume Safety
+
+CareerAgent should preserve the user’s original LaTeX resume structure, section order, commands, formatting, spacing, fonts, margins, and visual style. Tailoring should be content-only unless the user explicitly asks for design changes. Tailored resumes should be made by minimally editing `base_resume.tex`, not by replacing it with a new template.
+
+## Stage 3, Stage 4, Stage 5, and Stage 6 Usage
+
+### Job import workflow
+
+1. Open `/jobs`.
+2. Choose `Paste Job Description` or `Paste Job URL`.
+3. Paste the content and keep the source as `manual` or change it if needed.
+4. Click `Preview Parse`.
+5. Review the parsed fields.
+6. Click `Import and Save`.
+7. Open the saved job detail page.
+8. Restart the app later and your saved jobs will still be in PostgreSQL.
+
+### Verification workflow
+
+1. Open `/jobs`.
+2. Import a job first or use an existing saved job with a real URL.
+3. Click `Verify` on a single row or `Verify All Jobs`.
+4. Review the saved `verification_status`, `verification_score`, `likely_closed_score`, and evidence.
+5. Treat `open` and `probably_open` as stronger candidates, and treat `unknown`, `possibly_closed`, `likely_closed`, and `closed` as needing manual review.
+6. Open the job detail page to inspect verification evidence and raw verification details.
+
+### Scoring workflow
+
+1. Make sure profile and resume data exist locally, or let CareerAgent fall back to the committed example files.
+2. Import jobs and verify them first when URLs are available.
+3. Click `Score` on a single row or `Score All Jobs`.
+4. Review `resume_match_score`, `overall_priority_score`, and the scoring evidence on the Jobs page.
+5. Open the job detail page to inspect matched skills, missing skills, role fit evidence, location evidence, and freshness evidence.
+6. Use the `Recommended Jobs` section on `/jobs` to decide which verified jobs should move into packet generation next.
+
+### Stage 6 packet workflow
+
+1. Make sure profile and resume data exist locally, or let CareerAgent fall back to the committed example files.
+2. Import at least one job.
+3. Verify the job when a URL is available.
+4. Score the job.
+5. Open the job detail page.
+6. Click `Generate Application Packet`.
+7. Review the generated packet summary on the job detail page.
+8. Open `/packets` to view the full packet list.
+9. Open `/packets/{id}` to preview the generated files.
+10. Manually review and use the packet when applying.
+
+### Stage 6 limitations
+
+- URL parsing is basic and may not work on JavaScript-heavy job pages.
+- Verification is rule-based and approximate.
+- Scoring is also rule-based and approximate.
+- Stage 6 generation is deterministic/mock unless an optional AI provider is added later.
+- Tailored resume edits are intentionally conservative to preserve structure and avoid invented claims.
+- Cover letter and recruiter message drafts may still need meaningful editing.
+- Packet generation does not submit applications and does not autofill browser forms.
+- PDF compilation depends on local or container LaTeX availability.
+- If LaTeX is unavailable, packet generation still succeeds and stores the `.tex` source with a graceful warning.
+- User review is required before trusting or using any generated content.
+- Scoring does not use AI yet.
+- Scoring may miss skills or context that are not obvious in the parsed text or base resume text.
+- Scores do not guarantee interview chances or application outcomes.
+- Some job boards block requests or expose too little text for a confident check.
+- Browser-based extraction and browser-based verification may be added later.
+- A job can look open while still being closed behind a login wall or deeper ATS flow.
+- User review is still required before trusting any recommendation or generated packet asset.
+- AI-assisted parsing is Stage 10.
+- Some parsed, verified, and scored fields will be imperfect because CareerAgent currently uses deterministic rule-based parsing, verification, and scoring instead of AI or browser automation.
+
+## What Works In Stage 6
 
 - `GET /health`
+- `GET /api/market/summary`
+- `GET /api/autofill/status`
 - `GET /api/profile`
 - `PUT /api/profile`
 - `POST /api/profile/create-private`
@@ -171,7 +298,33 @@ Only the example/template files should appear as tracked private-data matches. I
 - `POST /api/resume/create-private`
 - `POST /api/resume/compile`
 - `GET /api/resume/status`
-- Existing Stage 1 routes for jobs, tracker, packets, market, and autofill
+- `GET /api/jobs`
+- `POST /api/jobs/parse`
+- `POST /api/jobs/import`
+- `POST /api/jobs/verify-url`
+- `POST /api/jobs/verify-all`
+- `POST /api/jobs/score-all`
+- `GET /api/jobs/recommendations`
+- `GET /api/jobs/{id}`
+- `GET /api/jobs/{id}/score`
+- `GET /api/jobs/{id}/verification`
+- `POST /api/jobs/{id}/score`
+- `POST /api/jobs/{id}/verify`
+- `PUT /api/jobs/{id}`
+- `DELETE /api/jobs/{id}`
+- `GET /api/packets`
+- `POST /api/packets/generate`
+- `GET /api/packets/{id}`
+- `GET /api/packets/job/{job_id}`
+- `GET /api/packets/{id}/file?file_key=cover_letter`
+- `GET /api/packets/{id}/file?file_key=recruiter_message`
+- `GET /api/packets/{id}/file?file_key=application_questions`
+- `GET /api/packets/{id}/file?file_key=application_notes`
+- `GET /api/packets/{id}/file?file_key=change_summary`
+- `GET /api/packets/{id}/file?file_key=tailored_resume_tex`
+- `GET /api/packets/{id}/file?file_key=job_summary`
+- `GET /api/packets/{id}/file?file_key=packet_metadata`
+- Real Stage 6 pages for jobs, packets, and packet detail
 
 ## Project Structure
 
@@ -221,7 +374,7 @@ careeragent/
 
 ### Stage 2: Profile + LaTeX Resume System
 
-- Status: Complete after this audit
+- Status: Complete
 - Load profile data from YAML.
 - Edit profile data from the UI.
 - Save profile changes to `data/profile.yaml`.
@@ -234,12 +387,20 @@ careeragent/
 
 ### Stage 3: Job Import + Job Parsing
 
+- Status: Complete
 - Paste job URL or description.
 - Parse title, company, location, requirements, responsibilities, skills, experience level, and source.
 - Save imported jobs to database.
+- Import jobs from pasted descriptions.
+- Import jobs from pasted URLs.
+- Use rule-based parsing for title, company, location, skills, salary, seniority, remote status, responsibilities, requirements, and application questions.
+- View saved jobs in the Jobs page.
+- View detailed job records.
+- Prepare parsed job records for Stage 4 verification and Stage 5 scoring.
 
 ### Stage 4: Job Verification + Likely Closed Scoring
 
+- Status: Complete
 - Check if job page loads.
 - Detect apply button.
 - Detect closed-job phrases.
@@ -249,17 +410,25 @@ careeragent/
 
 ### Stage 5: Match Scoring + Priority Ranking
 
+- Status: Complete
 - Compare resume/profile to job description.
 - Score skill match, role match, location match, freshness, verification, and application ease.
+- Score one job or all saved jobs against the current profile and base resume.
+- Store scoring evidence and scoring raw data.
 - Rank jobs by overall priority.
+- Show recommended jobs ranked by rule-based priority.
 - Improve scoring over time with real outcome data.
 
 ### Stage 6: Application Packet Generation
 
+- Status: Complete
 - Create per-job output folders.
-- Generate tailored resume, cover letter, recruiter message, application questions, notes, and change summary.
-- Write in the user’s direct/simple style.
-- Do not exaggerate or invent details.
+- Generate `tailored_resume.tex`, `job_summary.json`, `packet_metadata.json`, `cover_letter.md`, `recruiter_message.md`, `application_questions.md`, `application_notes.md`, and `change_summary.md`.
+- Attempt tailored resume PDF compilation when LaTeX is available.
+- Save packet records in PostgreSQL.
+- Show packet details in the frontend.
+- Preserve the user’s original resume structure and style.
+- Keep outputs private and gitignored.
 
 ### Stage 7: Tracker + Action Logging
 
@@ -300,16 +469,15 @@ careeragent/
 
 ## Next Stage
 
-**Next Stage: Stage 3 — Job Import + Job Parsing**
+**Next Stage: Stage 7 — Tracker + Action Logging**
 
-Stage 3 will:
+Stage 7 should:
 
-- add a job import form
-- allow pasted job descriptions
-- allow pasted job URLs
-- parse title, company, location, skills, requirements, responsibilities, experience level, and source
-- save imported jobs to PostgreSQL
-- prepare jobs for verification and scoring
+- record manual application actions and timestamps
+- track packet-ready, applied, interview, follow-up, rejection, and offer states
+- make it easy to mark a job as manually applied after the user submits it themselves
+- add basic follow-up reminders and action history
+- preserve the no-auto-submit safety boundary
 
 ## Planned Improvements
 

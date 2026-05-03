@@ -121,6 +121,7 @@ export function ResumeEditor() {
         <ul className="list">
           <li>Example files are safe public templates.</li>
           <li>Your real resume should live in <code>data/resume/base_resume.tex</code>, which is ignored by Git.</li>
+          <li>CareerAgent should preserve your LaTeX structure and visual style unless you explicitly ask for design changes.</li>
           <li>Save before compiling so the latest LaTeX source is written to disk.</li>
           <li>Generated PDFs and outputs are ignored.</li>
         </ul>
@@ -194,4 +195,3 @@ export function ResumeEditor() {
     </div>
   );
 }
-

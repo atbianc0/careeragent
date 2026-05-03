@@ -1,4 +1,41 @@
-from .scoring import calculate_priority_score
+from .scoring import (
+    build_job_scoring_updates,
+    calculate_application_ease_score,
+    calculate_experience_fit_score,
+    calculate_freshness_score,
+    calculate_location_score,
+    calculate_overall_priority_score,
+    calculate_priority_score,
+    calculate_profile_keyword_score,
+    calculate_resume_match_score,
+    calculate_role_match_score,
+    calculate_skill_match_score,
+    extract_profile_keywords,
+    extract_resume_keywords,
+    freshness_score_value,
+    load_resume_text_for_scoring,
+    load_user_profile_for_scoring,
+    score_job_against_profile,
+    score_saved_job,
+)
 
-__all__ = ["calculate_priority_score"]
-
+__all__ = [
+    "build_job_scoring_updates",
+    "calculate_application_ease_score",
+    "calculate_experience_fit_score",
+    "calculate_freshness_score",
+    "calculate_location_score",
+    "calculate_overall_priority_score",
+    "calculate_priority_score",
+    "calculate_profile_keyword_score",
+    "calculate_resume_match_score",
+    "calculate_role_match_score",
+    "calculate_skill_match_score",
+    "extract_profile_keywords",
+    "extract_resume_keywords",
+    "freshness_score_value",
+    "load_resume_text_for_scoring",
+    "load_user_profile_for_scoring",
+    "score_job_against_profile",
+    "score_saved_job",
+]

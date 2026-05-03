@@ -3,6 +3,12 @@ from functools import lru_cache
 from pathlib import Path
 
 
+def _parse_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _find_project_root() -> Path:
     current = Path(__file__).resolve()
     for candidate in current.parents:
@@ -27,6 +33,7 @@ class Settings:
         )
         self.backend_port = int(os.getenv("BACKEND_PORT", "8000"))
         self.frontend_port = int(os.getenv("FRONTEND_PORT", "3000"))
+        self.enable_sample_jobs = _parse_bool(os.getenv("ENABLE_SAMPLE_JOBS"), default=False)
 
     @property
     def cors_origins(self) -> list[str]:
@@ -50,6 +57,10 @@ class Settings:
     @property
     def resume_example_path(self) -> Path:
         return self.data_dir / "resume" / "base_resume.example.tex"
+
+    @property
+    def application_packets_dir(self) -> Path:
+        return self.outputs_dir / "application_packets"
 
 
 @lru_cache

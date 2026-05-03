@@ -1,18 +1,58 @@
 from .application_event import ApplicationEventRead
-from .application_packet import ApplicationPacketRead
-from .job import JobRead
+from .application_packet import (
+    ApplicationPacketCreate,
+    ApplicationPacketFileResponse,
+    ApplicationPacketGenerateRequest,
+    ApplicationPacketGenerateResponse,
+    ApplicationPacketRead,
+)
+from .job import (
+    JobBase,
+    JobCreate,
+    JobImportRequest,
+    JobParseResult,
+    JobRead,
+    JobScoreResult,
+    JobScoringResponse,
+    JobUpdate,
+    JobVerificationResponse,
+    JobVerificationResult,
+    RecommendationResponse,
+    ScoreAllSummary,
+    TopJobSummary,
+    VerifyAllSummary,
+    VerifyUrlRequest,
+)
 from .profile import CareerProfile, ProfileDocumentResponse, ProfileStatusResponse
 from .resume import ResumeCompileResponse, ResumeDocumentResponse, ResumeSaveRequest, ResumeStatusResponse
 
 __all__ = [
     "ApplicationEventRead",
+    "ApplicationPacketCreate",
+    "ApplicationPacketFileResponse",
+    "ApplicationPacketGenerateRequest",
+    "ApplicationPacketGenerateResponse",
     "ApplicationPacketRead",
     "CareerProfile",
+    "JobBase",
+    "JobCreate",
+    "JobImportRequest",
+    "JobParseResult",
     "JobRead",
+    "JobScoreResult",
+    "JobScoringResponse",
+    "JobUpdate",
+    "JobVerificationResponse",
+    "JobVerificationResult",
     "ProfileDocumentResponse",
     "ProfileStatusResponse",
     "ResumeCompileResponse",
     "ResumeDocumentResponse",
     "ResumeSaveRequest",
     "ResumeStatusResponse",
+    "RecommendationResponse",
+    "ScoreAllSummary",
+    "TopJobSummary",
+    "VerifyAllSummary",
+    "VerifyUrlRequest",
 ]

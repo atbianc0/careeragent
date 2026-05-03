@@ -9,7 +9,7 @@ router = APIRouter()
 def tracker_overview() -> dict:
     return {
         "status": "placeholder",
-        "stage": "Stage 1",
+        "stage": "Stage 7",
         "message": "Application tracking views and event logging arrive in later stages.",
         "next_focus": [
             "Track saved and verified jobs",
@@ -18,4 +18,3 @@ def tracker_overview() -> dict:
         ],
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
-

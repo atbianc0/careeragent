@@ -26,6 +26,25 @@ def _resume_missing_message() -> str:
     )
 
 
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _validate_compile_paths(input_path: Path, output_dir: Path) -> None:
+    allowed_input_roots = [settings.data_dir / "resume", settings.application_packets_dir]
+    allowed_output_root = settings.application_packets_dir
+    allowed_resume_output_root = settings.outputs_dir / "resume"
+
+    if not any(_is_within(input_path, root) for root in allowed_input_roots):
+        raise ValueError("LaTeX compilation only supports files inside data/resume or outputs/application_packets.")
+    if not (_is_within(output_dir, allowed_output_root) or _is_within(output_dir, allowed_resume_output_root)):
+        raise ValueError("LaTeX output must stay inside outputs/application_packets or outputs/resume.")
+
+
 def resolve_resume_source_and_path() -> tuple[str, Path]:
     if settings.resume_path.exists():
         return "private", settings.resume_path
@@ -133,33 +152,33 @@ def get_resume_status() -> dict[str, str | bool | None]:
     }
 
 
-def compile_latex_resume() -> dict[str, str | bool | None]:
+def compile_latex_file(input_path: Path, output_dir: Path, output_name: str) -> dict[str, str | bool | None]:
+    input_path = input_path.resolve()
+    output_dir = output_dir.resolve()
+    output_path = output_dir / f"{output_name}.pdf"
+
     try:
-        source, input_path = resolve_resume_source_and_path()
-    except FileNotFoundError as exc:
+        _validate_compile_paths(input_path, output_dir)
+    except ValueError as exc:
         return {
             "success": False,
-            "source": "missing",
+            "source": "custom",
             "compiler": None,
-            "input_path": "",
-            "output_path": None,
+            "input_path": _relative_path(input_path),
+            "output_path": _relative_path(output_path),
             "message": str(exc),
             "logs": "",
         }
 
     compiler_name = find_latex_compiler()
-    output_dir = _resume_output_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    job_name = "base_resume" if source == "private" else "base_resume_example"
-    output_path = output_dir / f"{job_name}.pdf"
     if output_path.exists():
         output_path.unlink()
 
     if compiler_name is None:
         return {
             "success": False,
-            "source": source,
+            "source": "custom",
             "compiler": None,
             "input_path": _relative_path(input_path),
             "output_path": _relative_path(output_path),
@@ -172,7 +191,7 @@ def compile_latex_resume() -> dict[str, str | bool | None]:
         "-interaction=nonstopmode",
         "-halt-on-error",
         "-file-line-error",
-        f"-jobname={job_name}",
+        f"-jobname={output_name}",
         f"-output-directory={output_dir.resolve()}",
         str(input_path.resolve()),
     ]
@@ -190,7 +209,7 @@ def compile_latex_resume() -> dict[str, str | bool | None]:
         logs = "\n".join(part for part in [exc.stdout or "", exc.stderr or ""] if part).strip()
         return {
             "success": False,
-            "source": source,
+            "source": "custom",
             "compiler": compiler_name,
             "input_path": _relative_path(input_path),
             "output_path": _relative_path(output_path),
@@ -202,19 +221,41 @@ def compile_latex_resume() -> dict[str, str | bool | None]:
     success = result.returncode == 0 and output_path.exists()
 
     if success:
-        if source == "private":
-            message = "Compiled the private resume successfully."
-        else:
-            message = "Compiled the example resume because no private resume exists yet."
+        message = "LaTeX compilation succeeded."
     else:
         message = "LaTeX compilation failed. Review the compiler logs for details."
 
     return {
         "success": success,
-        "source": source,
+        "source": "custom",
         "compiler": compiler_name,
         "input_path": _relative_path(input_path),
         "output_path": _relative_path(output_path),
         "message": message,
         "logs": logs,
     }
+
+
+def compile_latex_resume() -> dict[str, str | bool | None]:
+    try:
+        source, input_path = resolve_resume_source_and_path()
+    except FileNotFoundError as exc:
+        return {
+            "success": False,
+            "source": "missing",
+            "compiler": None,
+            "input_path": "",
+            "output_path": None,
+            "message": str(exc),
+            "logs": "",
+        }
+
+    job_name = "base_resume" if source == "private" else "base_resume_example"
+    result = compile_latex_file(input_path, _resume_output_dir(), job_name)
+    result["source"] = source
+    if result["success"]:
+        if source == "private":
+            result["message"] = "Compiled the private resume successfully."
+        else:
+            result["message"] = "Compiled the example resume because no private resume exists yet."
+    return result

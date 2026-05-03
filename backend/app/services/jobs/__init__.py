@@ -1,4 +1,7 @@
-from .parser import parse_job_description_placeholder
+"""Job services package.
 
-__all__ = ["parse_job_description_placeholder"]
+Keep this module intentionally light so parser and store modules can be imported
+independently without triggering package-level circular imports during app startup.
+"""
 
+__all__: list[str] = []
