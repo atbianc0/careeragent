@@ -1,0 +1,60 @@
+personal:
+  name: ""
+  email: ""
+  phone: ""
+  location: ""
+
+education:
+  school: "UC Berkeley"
+  degree: "Data Science"
+  graduation: "May 2026"
+
+links:
+  linkedin: ""
+  github: ""
+  portfolio: ""
+
+target_roles:
+  - "Data Scientist"
+  - "Data Engineer"
+  - "ML Engineer"
+  - "Analytics Engineer"
+  - "Data Analyst"
+
+skills:
+  - "Python"
+  - "SQL"
+  - "Pandas"
+  - "NumPy"
+  - "scikit-learn"
+  - "PyTorch"
+  - "TensorFlow"
+  - "Docker"
+  - "Git"
+  - "Linux"
+
+application_defaults:
+  work_authorized_us: true
+  need_sponsorship_now: false
+  need_sponsorship_future: false
+  willing_to_relocate: true
+  preferred_locations:
+    - "Bay Area"
+    - "California"
+    - "Remote"
+
+question_policy:
+  answer_work_authorization: true
+  answer_sponsorship: true
+  answer_relocation: true
+  answer_salary_expectation: "draft_only"
+  answer_demographic_questions: "prefer_not_to_answer"
+  never_lie: true
+
+writing_style:
+  tone: "direct, simple, specific, not overly corporate"
+  avoid:
+    - "fake-polished language"
+    - "exaggeration"
+    - "made-up experience"
+

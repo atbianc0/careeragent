@@ -1,0 +1,61 @@
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+*.secret
+*.secrets
+*.token
+*.tokens
+*.key
+*.pem
+*.p12
+*.pfx
+*.credentials
+*.creds
+secrets/
+.secrets/
+
+# Private local profile and resume files
+data/profile.yaml
+data/resume/base_resume.tex
+
+# Generated outputs and private application artifacts
+outputs/
+outputs/application_packets/
+application_packets/
+*.pdf
+
+# Local database files
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
+
+# Python caches and virtual environments
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+backend/.pytest_cache/
+
+# Node and frontend build artifacts
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+out/
+frontend/out/
+build/
+dist/
+coverage/
+
+# Operating system files
+.DS_Store
