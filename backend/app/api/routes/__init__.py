@@ -1,4 +1,4 @@
-from . import autofill, health, jobs, market, packets, profile, tracker
+from . import autofill, health, jobs, market, packets, profile, resume, tracker
 
 __all__ = [
     "autofill",
@@ -7,6 +7,6 @@ __all__ = [
     "market",
     "packets",
     "profile",
+    "resume",
     "tracker",
 ]
-

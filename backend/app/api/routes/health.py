@@ -8,6 +8,5 @@ def health_check() -> dict[str, str]:
     return {
         "status": "ok",
         "service": "careeragent-backend",
-        "stage": "Stage 1 - Project Skeleton",
+        "stage": "Stage 2 - Profile + LaTeX Resume System",
     }
-

@@ -68,6 +68,11 @@ a {
   font-size: 1.25rem;
 }
 
+.brand {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
 .navbar-brand span {
   font-size: 0.9rem;
   color: var(--muted);
@@ -292,6 +297,133 @@ tr:last-child td {
   color: var(--warning);
 }
 
+.form-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.field-group {
+  display: grid;
+  gap: 8px;
+}
+
+.field-group span {
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.input,
+.textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text);
+  padding: 12px 14px;
+  font: inherit;
+}
+
+.textarea {
+  resize: vertical;
+}
+
+.code-editor,
+.code-block,
+code {
+  font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+}
+
+.code-editor {
+  min-height: 420px;
+}
+
+.code-block {
+  margin: 12px 0 0;
+  padding: 14px;
+  border-radius: 14px;
+  overflow-x: auto;
+  background: rgba(31, 41, 51, 0.06);
+  border: 1px solid var(--border);
+  white-space: pre-wrap;
+}
+
+.checkbox-grid {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.checkbox-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  color: var(--text);
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.button {
+  appearance: none;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 11px 16px;
+  font: inherit;
+  cursor: pointer;
+  color: white;
+  background: var(--accent);
+  transition: opacity 0.2s ease, transform 0.2s ease, background-color 0.2s ease;
+}
+
+.button.secondary {
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--accent);
+}
+
+.button.ghost {
+  background: rgba(15, 118, 110, 0.12);
+  color: var(--accent);
+}
+
+.button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.message {
+  margin: 16px 0 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+}
+
+.message.success {
+  background: rgba(15, 118, 110, 0.12);
+  color: var(--accent);
+}
+
+.message.error {
+  background: rgba(138, 59, 18, 0.12);
+  color: var(--warning);
+}
+
+.meta-stack {
+  display: grid;
+  gap: 12px;
+}
+
+details summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
 @media (max-width: 720px) {
   .shell {
     width: min(100% - 20px, 1180px);
@@ -309,4 +441,3 @@ tr:last-child td {
     grid-template-columns: 1fr;
   }
 }
-
