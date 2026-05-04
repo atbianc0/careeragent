@@ -1,11 +1,13 @@
-from . import autofill, health, jobs, market, packets, profile, resume, tracker
+from . import ai, autofill, health, jobs, market, packets, prediction, profile, resume, tracker
 
 __all__ = [
+    "ai",
     "autofill",
     "health",
     "jobs",
     "market",
     "packets",
+    "prediction",
     "profile",
     "resume",
     "tracker",

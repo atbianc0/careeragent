@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from app.services.ai import build_job_parse_prompt, get_ai_provider
 from app.utils.text import normalize_whitespace
 
 DEFAULT_HEADERS = {
@@ -502,6 +503,98 @@ def _build_parse_result(text: str, *, url: str = "", title_hint: str | None = No
     }
 
 
+AI_PARSE_FIELDS = {
+    "company",
+    "title",
+    "location",
+    "employment_type",
+    "remote_status",
+    "role_category",
+    "seniority_level",
+    "years_experience_min",
+    "years_experience_max",
+    "salary_min",
+    "salary_max",
+    "salary_currency",
+    "required_skills",
+    "preferred_skills",
+    "responsibilities",
+    "requirements",
+    "education_requirements",
+    "application_questions",
+}
+
+
+def _ai_parse_mode(provider_name: str) -> str:
+    if provider_name == "mock":
+        return "mock_ai"
+    return f"ai_{provider_name}"
+
+
+def _merge_ai_parse_result(rule_based_result: dict[str, Any], ai_result: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(rule_based_result)
+    for field in AI_PARSE_FIELDS:
+        ai_value = ai_result.get(field)
+        if ai_value in (None, "", []):
+            continue
+        merged[field] = ai_value
+    return merged
+
+
+def _parse_with_optional_ai(
+    *,
+    rule_based_result: dict[str, Any],
+    cleaned_text: str,
+    use_ai: bool,
+    provider_name: str | None,
+) -> dict[str, Any]:
+    if not use_ai:
+        return {
+            **rule_based_result,
+            "parse_mode": "rule_based",
+            "provider": None,
+            "parsing_warnings": [],
+        }
+
+    provider = get_ai_provider(provider_name)
+    warnings: list[str] = []
+    if not provider.is_available():
+        warnings.append(provider.unavailable_reason or f"{provider.name} provider is unavailable.")
+        return {
+            **rule_based_result,
+            "parse_mode": "rule_based",
+            "provider": provider.name,
+            "parsing_warnings": warnings + ["Fell back to rule-based parsing."],
+        }
+
+    ai_response = provider.parse_json(
+        "job_parse",
+        build_job_parse_prompt(cleaned_text),
+        context={"fallback_json": rule_based_result},
+    )
+    warnings.extend(list(ai_response.get("warnings") or []))
+    parsed_json = ai_response.get("parsed_json")
+    if ai_response.get("success") and isinstance(parsed_json, dict):
+        merged = _merge_ai_parse_result(rule_based_result, parsed_json)
+        raw_parsed_data = dict(merged.get("raw_parsed_data") or {})
+        raw_parsed_data["ai_result"] = {"provider": provider.name, "warnings": warnings}
+        merged["raw_parsed_data"] = raw_parsed_data
+        return {
+            **merged,
+            "parse_mode": _ai_parse_mode(provider.name),
+            "provider": provider.name,
+            "parsing_warnings": warnings,
+        }
+
+    fallback_warnings = warnings or ["AI parsing failed. Fell back to rule-based parsing."]
+    return {
+        **rule_based_result,
+        "parse_mode": "rule_based",
+        "provider": provider.name,
+        "parsing_warnings": fallback_warnings,
+    }
+
+
 def fetch_job_url_text(url: str) -> dict[str, Any]:
     normalized_url = url.strip()
     if not normalized_url:
@@ -542,14 +635,20 @@ def fetch_job_url_text(url: str) -> dict[str, Any]:
     }
 
 
-def parse_job_description(text: str) -> dict[str, Any]:
-    return _build_parse_result(text, url="")
+def parse_job_description(text: str, *, use_ai: bool = False, provider_name: str | None = None) -> dict[str, Any]:
+    rule_based_result = _build_parse_result(text, url="")
+    return _parse_with_optional_ai(
+        rule_based_result=rule_based_result,
+        cleaned_text=str(rule_based_result.get("job_description") or text),
+        use_ai=use_ai,
+        provider_name=provider_name,
+    )
 
 
-def parse_job_url(url: str) -> dict[str, Any]:
+def parse_job_url(url: str, *, use_ai: bool = False, provider_name: str | None = None) -> dict[str, Any]:
     fetched = fetch_job_url_text(url)
     title_hint = fetched["h1"] or fetched["page_title"]
-    return _build_parse_result(
+    rule_based_result = _build_parse_result(
         fetched["visible_text"],
         url=fetched["url"],
         title_hint=title_hint,
@@ -558,4 +657,10 @@ def parse_job_url(url: str) -> dict[str, Any]:
             "page_title": fetched["page_title"],
             "h1": fetched["h1"],
         },
+    )
+    return _parse_with_optional_ai(
+        rule_based_result=rule_based_result,
+        cleaned_text=fetched["visible_text"],
+        use_ai=use_ai,
+        provider_name=provider_name,
     )

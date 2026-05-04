@@ -91,11 +91,11 @@ export function TrackerBoard() {
       <section className="panel">
         <div className="section-title">
           <h2>Tracker Overview</h2>
-          <span className="status-tag">Stage 7</span>
+          <span className="status-tag">Stage 8</span>
         </div>
         <p className="subtle">
-          Stage 7 tracks the application workflow. CareerAgent still does not submit applications, and Stage 8 will add
-          browser autofill while still stopping before final submit.
+          Stage 8 tracks the application workflow and now adds browser autofill assistance. CareerAgent still does not
+          submit applications and still stops before any final submit action.
         </p>
         <div className="filter-row">
           <label className="field-group">
@@ -171,6 +171,11 @@ export function TrackerBoard() {
                       <Link href={`/jobs/${job.id}`} className="button secondary compact">
                         View Job
                       </Link>
+                      {job.url.trim() ? (
+                        <Link href={`/autofill?jobId=${job.id}`} className="button secondary compact">
+                          Start Autofill
+                        </Link>
+                      ) : null}
                     </div>
                     <TrackingActions
                       job={job}

@@ -52,7 +52,6 @@ def preview_job_parse(payload: JobImportRequest) -> JobParseResult:
 
     parsed_job["source"] = payload.source
     parsed_job["input_type"] = payload.input_type
-    parsed_job["parse_mode"] = "rule_based_v1"
     return parsed_job
 
 
@@ -63,15 +62,29 @@ def import_job(payload: JobImportRequest, db: Session = Depends(get_db)) -> JobR
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    parse_mode = str(parsed_job.pop("parse_mode", "rule_based") or "rule_based")
+    parsing_provider = parsed_job.pop("provider", None)
+    parsing_warnings = list(parsed_job.pop("parsing_warnings", []) or [])
+    raw_parsed_data = dict(parsed_job.get("raw_parsed_data") or {})
+    raw_parsed_data["parsing_mode"] = parse_mode
+    raw_parsed_data["ai_provider"] = parsing_provider
+    raw_parsed_data["parsing_warnings"] = parsing_warnings
+    parsed_job["raw_parsed_data"] = raw_parsed_data
     parsed_job["source"] = payload.source
     job = create_job(db, parsed_job)
     log_event(
         db,
         job_id=job.id,
         event_type="job_imported",
-        notes=f"Imported job from {payload.input_type} input.",
+        notes=f"Imported job from {payload.input_type} input using {parse_mode} parsing.",
         new_status=job.application_status,
-        metadata_json={"input_type": payload.input_type, "source": payload.source},
+        metadata_json={
+            "input_type": payload.input_type,
+            "source": payload.source,
+            "parse_mode": parse_mode,
+            "provider": parsing_provider,
+            "parsing_warnings": parsing_warnings,
+        },
     )
     return job
 
@@ -362,9 +375,9 @@ def _parse_job_import(payload: JobImportRequest) -> dict:
         raise ValueError("Job content is empty. Paste a description or provide a URL before parsing.")
 
     if payload.input_type == "description":
-        return parse_job_description(content)
+        return parse_job_description(content, use_ai=payload.use_ai, provider_name=payload.provider)
     if payload.input_type == "url":
-        return parse_job_url(content)
+        return parse_job_url(content, use_ai=payload.use_ai, provider_name=payload.provider)
     raise ValueError(f"Unsupported job input type: {payload.input_type}")
 
 

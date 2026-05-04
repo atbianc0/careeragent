@@ -49,14 +49,14 @@ export default async function PacketsPage() {
   return (
     <div className="page">
       <section className="hero">
-        <span className="eyebrow">Stage 7 - Packets + Tracking</span>
+        <span className="eyebrow">Stage 8 - Packets + Browser Autofill</span>
         <h1>Packets</h1>
         <p className="hero-copy">
           Stage 6 generates reviewable application packets. It does not submit applications.
         </p>
         <p className="hero-copy">
           Generated outputs stay private in the local `outputs/application_packets/` folder, remain gitignored,
-          and packet detail views now log tracker activity.
+          packet detail views log tracker activity, and Stage 8 can use a packet’s generated files for browser autofill.
         </p>
       </section>
 
@@ -103,9 +103,16 @@ export default async function PacketsPage() {
                     <td>{countFiles(packet)}</td>
                     <td>{packet.packet_path}</td>
                     <td>
-                      <Link href={`/packets/${packet.id}`} className="button secondary compact">
-                        View Packet
-                      </Link>
+                      <div className="action-stack">
+                        <Link href={`/packets/${packet.id}`} className="button secondary compact">
+                          View Packet
+                        </Link>
+                        {packet.job ? (
+                          <Link href={`/autofill?jobId=${packet.job.id}`} className="button secondary compact">
+                            Autofill
+                          </Link>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))}

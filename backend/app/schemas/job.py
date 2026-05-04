@@ -55,6 +55,12 @@ class JobBase(FlexibleJobModel):
     scoring_evidence: dict[str, Any] = Field(default_factory=dict)
     scoring_raw_data: dict[str, Any] = Field(default_factory=dict)
     scored_at: datetime | None = None
+    predicted_priority_score: float = 0.0
+    predicted_close_risk_score: float = 0.0
+    predicted_response_score: float = 0.0
+    prediction_confidence: float = 0.0
+    prediction_evidence: dict[str, Any] = Field(default_factory=dict)
+    prediction_updated_at: datetime | None = None
     application_status: str = "found"
     application_link_opened_at: datetime | None = None
     packet_generated_at: datetime | None = None
@@ -83,7 +89,14 @@ class JobBase(FlexibleJobModel):
     def default_list_fields(cls, value: list[str] | None) -> list[str]:
         return value or []
 
-    @field_validator("raw_parsed_data", "verification_raw_data", "scoring_evidence", "scoring_raw_data", mode="before")
+    @field_validator(
+        "raw_parsed_data",
+        "verification_raw_data",
+        "scoring_evidence",
+        "scoring_raw_data",
+        "prediction_evidence",
+        mode="before",
+    )
     @classmethod
     def default_raw_parsed_data(cls, value: dict[str, Any] | None) -> dict[str, Any]:
         return value or {}
@@ -140,6 +153,12 @@ class JobUpdate(FlexibleJobModel):
     scoring_evidence: dict[str, Any] | None = None
     scoring_raw_data: dict[str, Any] | None = None
     scored_at: datetime | None = None
+    predicted_priority_score: float | None = None
+    predicted_close_risk_score: float | None = None
+    predicted_response_score: float | None = None
+    prediction_confidence: float | None = None
+    prediction_evidence: dict[str, Any] | None = None
+    prediction_updated_at: datetime | None = None
     application_status: str | None = None
     application_link_opened_at: datetime | None = None
     packet_generated_at: datetime | None = None
@@ -167,11 +186,15 @@ class JobImportRequest(FlexibleJobModel):
     input_type: Literal["description", "url"]
     content: str
     source: str = "manual"
+    use_ai: bool = False
+    provider: str = "mock"
 
 
 class JobParseResult(JobBase):
     input_type: Literal["description", "url"]
     parse_mode: str = "rule_based_v1"
+    provider: str | None = None
+    parsing_warnings: list[str] = Field(default_factory=list)
 
 
 class JobVerificationResult(FlexibleJobModel):

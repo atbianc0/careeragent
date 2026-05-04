@@ -77,6 +77,12 @@ def create_job(db: Session, parsed_job: dict[str, Any]) -> Job:
     payload.setdefault("scoring_evidence", {})
     payload.setdefault("scoring_raw_data", {})
     payload.setdefault("scored_at", None)
+    payload.setdefault("predicted_priority_score", 0.0)
+    payload.setdefault("predicted_close_risk_score", 0.0)
+    payload.setdefault("predicted_response_score", 0.0)
+    payload.setdefault("prediction_confidence", 0.0)
+    payload.setdefault("prediction_evidence", {})
+    payload.setdefault("prediction_updated_at", None)
     payload["freshness_score"] = calculate_freshness_score(
         payload.get("posted_date"),
         payload.get("first_seen_date"),

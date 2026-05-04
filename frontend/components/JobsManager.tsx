@@ -5,12 +5,16 @@ import { useEffect, useState } from "react";
 
 import { JobTable } from "@/components/JobTable";
 import {
+  type AIProviderInfo,
+  type AIStatus,
   type Job,
   type JobImportRequest,
   type JobParseResult,
   type RecommendationResponse,
   type ScoreAllSummary,
   type VerifyAllSummary,
+  getAIProviders,
+  getAIStatus,
   getJobs,
   getRecommendations,
   importJob,
@@ -81,6 +85,8 @@ const defaultRequest: JobImportRequest = {
   input_type: "description",
   content: "",
   source: "manual",
+  use_ai: false,
+  provider: "mock",
 };
 
 export function JobsManager() {
@@ -96,6 +102,8 @@ export function JobsManager() {
   const [scoringJobId, setScoringJobId] = useState<number | null>(null);
   const [verifySummary, setVerifySummary] = useState<VerifyAllSummary | null>(null);
   const [scoreSummary, setScoreSummary] = useState<ScoreAllSummary | null>(null);
+  const [aiStatus, setAIStatus] = useState<AIStatus | null>(null);
+  const [providerOptions, setProviderOptions] = useState<AIProviderInfo[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastSavedJobId, setLastSavedJobId] = useState<number | null>(null);
@@ -122,8 +130,24 @@ export function JobsManager() {
     }
   }
 
+  async function loadAIConfig() {
+    try {
+      const [statusResponse, providersResponse] = await Promise.all([getAIStatus(), getAIProviders()]);
+      setAIStatus(statusResponse);
+      setProviderOptions(providersResponse.providers);
+    } catch {
+      setAIStatus(null);
+      setProviderOptions([
+        { name: "mock", available: true, message: null },
+        { name: "openai", available: false, message: "Unavailable." },
+        { name: "local", available: false, message: "Placeholder provider." },
+      ]);
+    }
+  }
+
   useEffect(() => {
     void refreshData();
+    void loadAIConfig();
   }, []);
 
   async function handlePreview() {
@@ -154,11 +178,16 @@ export function JobsManager() {
       const response = await importJob(form);
       setMessage(`Imported and saved job #${response.id}.`);
       setLastSavedJobId(response.id);
-      setPreview({
-        ...response,
-        input_type: form.input_type,
-        parse_mode: "rule_based_v1",
-      });
+      setPreview((currentPreview) =>
+        currentPreview
+          ? {
+              ...currentPreview,
+              ...response,
+              source: form.source,
+              input_type: form.input_type,
+            }
+          : null,
+      );
       await refreshData();
     } catch (importError) {
       setError(importError instanceof Error ? importError.message : "Failed to import and save the job.");
@@ -257,11 +286,11 @@ export function JobsManager() {
       <section className="panel">
         <div className="section-title">
           <h2>Recommended Jobs</h2>
-          <span className="status-tag">Stage 5</span>
+          <span className="status-tag">Stage 11-ready</span>
         </div>
         <p className="subtle">
           Recommendations are rule-based and blend resume fit, availability, freshness, location fit, and application ease.
-          They are a starting point, not a guarantee. Stage 6 can generate application packets for the jobs you choose next.
+          Predictions on the Predictions page add cautious outcome-informed estimates. Neither ranking is a guarantee.
         </p>
         {loading ? (
           <p className="subtle">Loading recommendations...</p>
@@ -308,16 +337,17 @@ export function JobsManager() {
       <section className="panel">
         <div className="section-title">
           <h2>Import Job</h2>
-          <span className="status-tag">Stage 5</span>
+          <span className="status-tag">Stage 11</span>
         </div>
         <p className="subtle">
-          Paste a job description or URL, preview the rule-based parsing, save the job into PostgreSQL, then verify and score
-          it against the current profile and resume.
+          Paste a job description or URL, preview the parsing, save the job into PostgreSQL, then verify and score
+          it against the current profile and resume. AI parsing is optional and rule-based parsing stays available by default.
         </p>
         <ul className="list">
-          <li>Parsing is rule-based and only fills fields CareerAgent can honestly infer.</li>
+          <li>Rule-based parsing remains the default and only fills fields CareerAgent can honestly infer.</li>
+          <li>AI parsing is a draft enhancement and still must not invent experience, credentials, or work authorization facts.</li>
           <li>Verification is still rule-based and may be limited on JavaScript-heavy or blocked job pages.</li>
-          <li>Scoring is also rule-based in Stage 5. It does not use AI yet and may miss context or hidden requirements.</li>
+          <li>Scoring is still deterministic in the current workflow and may miss context or hidden requirements.</li>
         </ul>
 
         <div className="form-grid">
@@ -346,6 +376,36 @@ export function JobsManager() {
               value={form.source}
               onChange={(event) => setForm((current) => ({ ...current, source: event.target.value }))}
             />
+          </label>
+
+          <label className="field-group">
+            <span>Use AI Parsing</span>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={Boolean(form.use_ai)}
+                onChange={(event) => setForm((current) => ({ ...current, use_ai: event.target.checked }))}
+              />
+              <span>AI parsing is optional. Rule-based parsing is used by default.</span>
+            </label>
+          </label>
+
+          <label className="field-group">
+            <span>AI Provider</span>
+            <select
+              className="input"
+              value={form.provider || "mock"}
+              onChange={(event) => setForm((current) => ({ ...current, provider: event.target.value }))}
+            >
+              {(providerOptions.length > 0 ? providerOptions : [{ name: "mock", available: true, message: null }]).map((provider) => (
+                <option key={provider.name} value={provider.name}>
+                  {provider.name} {provider.available ? "" : "(unavailable)"}
+                </option>
+              ))}
+            </select>
+            <span className="subtle">
+              {aiStatus?.message || "CareerAgent falls back safely if the selected provider is unavailable."}
+            </span>
           </label>
 
           <label className="field-group">
@@ -416,11 +476,23 @@ export function JobsManager() {
                 <dd>{preview.seniority_level || "Unknown"}</dd>
                 <dt>Remote Status</dt>
                 <dd>{preview.remote_status || "Unknown"}</dd>
+                <dt>Provider</dt>
+                <dd>{preview.provider || "rule_based"}</dd>
                 <dt>Salary</dt>
                 <dd>{formatSalaryRange(preview)}</dd>
                 <dt>Years Experience</dt>
                 <dd>{formatYearsExperience(preview)}</dd>
               </dl>
+              {preview.parsing_warnings.length > 0 ? (
+                <>
+                  <h3>Parsing Warnings</h3>
+                  <ul className="list">
+                    {preview.parsing_warnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
             </article>
 
             <article className="panel subtle-panel">

@@ -11,6 +11,8 @@ const navItems = [
   { href: "/tracker", label: "Tracker" },
   { href: "/packets", label: "Packets" },
   { href: "/market", label: "Market" },
+  { href: "/predictions", label: "Predictions" },
+  { href: "/ai", label: "AI" },
   { href: "/autofill", label: "Autofill" }
 ];
 
@@ -28,7 +30,7 @@ export default function NavBar() {
 
       <div className="nav-links">
         {navItems.map((item) => {
-          const isActive = pathname === item.href;
+          const isActive = item.href === "/" ? pathname === "/" : pathname === item.href || pathname.startsWith(`${item.href}/`);
 
           return (
             <Link key={item.href} href={item.href} className={isActive ? "nav-link active" : "nav-link"}>

@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { AutofillControls } from "@/components/AutofillControls";
 import { ApplicationPacketFilePreview, getPacket, getPacketFile } from "@/lib/api";
 
 function getStatusClassName(status: string) {
@@ -101,7 +102,7 @@ export default async function PacketDetailPage({
   return (
     <div className="page">
       <section className="hero">
-        <span className="eyebrow">Stage 7 Packet Detail</span>
+        <span className="eyebrow">Stage 6 Packet Detail</span>
         <h1>{packet.job?.title || "Application Packet"}</h1>
         <p className="hero-copy">
           {packet.job?.company || "Unknown Company"} • packet #{packet.id}
@@ -117,6 +118,11 @@ export default async function PacketDetailPage({
           {packet.job ? (
             <Link href={`/jobs/${packet.job.id}`} className="button secondary">
               Back to Job
+            </Link>
+          ) : null}
+          {packet.job ? (
+            <Link href={`/autofill?jobId=${packet.job.id}`} className="button secondary">
+              Open Autofill Page
             </Link>
           ) : null}
         </div>
@@ -177,6 +183,17 @@ export default async function PacketDetailPage({
           )}
         </article>
       </section>
+
+      {packet.job ? (
+        <section className="panel">
+          <h2>Start Autofill for This Packet</h2>
+          <p className="subtle">
+            CareerAgent will use this packet when possible, fill safe fields only, and stop before any final submit
+            action. You must review and submit manually.
+          </p>
+          <AutofillControls job={packet.job} initialPackets={[packet]} initialPacketId={packet.id} />
+        </section>
+      ) : null}
 
       <section className="panel-grid">
         {fileKeys.map((fileKey) => {

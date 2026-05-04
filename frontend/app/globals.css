@@ -350,6 +350,21 @@ tr:last-child td {
   color: #a45a1b;
 }
 
+.status-low {
+  background: rgba(15, 118, 110, 0.14);
+  color: #0f766e;
+}
+
+.status-medium {
+  background: rgba(205, 137, 70, 0.18);
+  color: #a45a1b;
+}
+
+.status-high {
+  background: rgba(138, 59, 18, 0.16);
+  color: var(--warning);
+}
+
 .status-likely-closed,
 .status-closed {
   background: rgba(138, 59, 18, 0.16);
@@ -434,6 +449,11 @@ tr:last-child td {
 }
 
 .form-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.stack {
   display: grid;
   gap: 14px;
 }

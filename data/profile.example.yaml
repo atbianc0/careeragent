@@ -5,9 +5,9 @@ personal:
   location: ""
 
 education:
-  school: "UC Berkeley"
-  degree: "Data Science"
-  graduation: "May 2026"
+  school: ""
+  degree: ""
+  graduation: ""
 
 links:
   linkedin: ""
@@ -34,19 +34,17 @@ skills:
   - "Linux"
 
 application_defaults:
-  work_authorized_us: true
+  work_authorized_us: false
   need_sponsorship_now: false
   need_sponsorship_future: false
-  willing_to_relocate: true
+  willing_to_relocate: false
   preferred_locations:
-    - "Bay Area"
-    - "California"
     - "Remote"
 
 question_policy:
-  answer_work_authorization: true
-  answer_sponsorship: true
-  answer_relocation: true
+  answer_work_authorization: false
+  answer_sponsorship: false
+  answer_relocation: false
   answer_salary_expectation: "draft_only"
   answer_demographic_questions: "prefer_not_to_answer"
   never_lie: true
@@ -57,4 +55,3 @@ writing_style:
     - "fake-polished language"
     - "exaggeration"
     - "made-up experience"
-

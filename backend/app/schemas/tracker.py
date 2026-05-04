@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.application_event import ApplicationEventRead
 from app.schemas.job import JobRead
@@ -32,7 +32,9 @@ class TrackerJobRead(JobRead):
 
 class StatusUpdateRequest(BaseModel):
     status: str
-    notes: str | None = None
+    notes: str | None = Field(default=None, validation_alias=AliasChoices("notes", "note"))
+
+    model_config = ConfigDict(populate_by_name=True)
 
     @field_validator("status")
     @classmethod
@@ -44,7 +46,9 @@ class StatusUpdateRequest(BaseModel):
 
 
 class NoteCreateRequest(BaseModel):
-    notes: str
+    notes: str = Field(validation_alias=AliasChoices("notes", "note"))
+
+    model_config = ConfigDict(populate_by_name=True)
 
     @field_validator("notes")
     @classmethod
@@ -57,11 +61,15 @@ class NoteCreateRequest(BaseModel):
 
 class FollowUpRequest(BaseModel):
     follow_up_at: datetime
-    notes: str | None = None
+    notes: str | None = Field(default=None, validation_alias=AliasChoices("notes", "note"))
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class CompleteFollowUpRequest(BaseModel):
-    notes: str | None = None
+    notes: str | None = Field(default=None, validation_alias=AliasChoices("notes", "note"))
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class TrackerSummary(BaseModel):

@@ -10,10 +10,16 @@ def generate_change_summary(
     job: Any,
     source_resume_path: str,
     tailoring_result: dict[str, Any],
+    generation_mode: str = "deterministic_mock",
+    provider_name: str | None = None,
+    ai_warnings: list[str] | None = None,
+    ai_tailoring_notes: list[str] | None = None,
 ) -> str:
     changes = list(tailoring_result.get("changes") or [])
     unchanged = list(tailoring_result.get("unchanged") or [])
     safety_notes = list(tailoring_result.get("safety_notes") or [])
+    advisory_notes = list(ai_tailoring_notes or [])
+    generation_warnings = list(ai_warnings or [])
 
     lines = [
         "# Change Summary",
@@ -25,6 +31,10 @@ def generate_change_summary(
         "",
         "## Resume Structure Preserved",
         "CareerAgent preserved the original LaTeX structure, section order, commands, formatting, spacing, fonts, margins, and overall visual style of the source resume.",
+        "",
+        "## Generation Mode",
+        f"- Mode: {generation_mode}",
+        f"- Provider: {provider_name or 'none'}",
         "",
         "## Content Changes Made",
     ]
@@ -48,6 +58,17 @@ def generate_change_summary(
     lines.extend(
         [
             "",
+            "## AI Advisory Notes",
+        ]
+    )
+    if advisory_notes:
+        lines.extend(f"- {item}" for item in advisory_notes)
+    else:
+        lines.append("- No AI advisory notes were applied to the resume beyond conservative deterministic tailoring.")
+
+    lines.extend(
+        [
+            "",
             "## Safety Confirmation",
             "- No experience was invented.",
             "- No skills were invented.",
@@ -67,10 +88,18 @@ def generate_change_summary(
         [
             "",
             "## Limitations",
-            "- Stage 6 currently uses deterministic/mock generation unless an optional AI provider is added later.",
+            "- Stage 10 can use optional AI draft generation, but all output remains reviewable and safety-checked.",
             "- Resume tailoring is intentionally conservative to preserve structure and avoid invented claims.",
             "- The user should manually review every generated file before using it anywhere.",
         ]
     )
+    if generation_warnings:
+        lines.extend(
+            [
+                "",
+                "## Warnings",
+            ]
+        )
+        lines.extend(f"- {warning}" for warning in unique_preserve_order(generation_warnings))
 
     return "\n".join(lines).rstrip() + "\n"

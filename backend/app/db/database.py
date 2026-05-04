@@ -74,6 +74,12 @@ JOB_COLUMN_DEFINITIONS = {
     "scoring_evidence": "JSON",
     "scoring_raw_data": "JSON",
     "scored_at": "TIMESTAMP WITH TIME ZONE",
+    "predicted_priority_score": "FLOAT",
+    "predicted_close_risk_score": "FLOAT",
+    "predicted_response_score": "FLOAT",
+    "prediction_confidence": "FLOAT",
+    "prediction_evidence": "JSON",
+    "prediction_updated_at": "TIMESTAMP WITH TIME ZONE",
     "application_link_opened_at": "TIMESTAMP WITH TIME ZONE",
     "packet_generated_at": "TIMESTAMP WITH TIME ZONE",
     "applied_at": "TIMESTAMP WITH TIME ZONE",
@@ -250,6 +256,16 @@ def backfill_job_defaults() -> None:
                 job.scoring_evidence = {}
             if job.scoring_raw_data is None:
                 job.scoring_raw_data = {}
+            if job.predicted_priority_score is None:
+                job.predicted_priority_score = 0.0
+            if job.predicted_close_risk_score is None:
+                job.predicted_close_risk_score = 0.0
+            if job.predicted_response_score is None:
+                job.predicted_response_score = 0.0
+            if job.prediction_confidence is None:
+                job.prediction_confidence = 0.0
+            if job.prediction_evidence is None:
+                job.prediction_evidence = {}
             if job.application_status is None:
                 job.application_status = "found"
             elif job.application_status not in VALID_APPLICATION_STATUSES:
@@ -525,6 +541,16 @@ def normalize_sample_jobs() -> None:
                 job.scoring_evidence = {}
             if job.scoring_raw_data is None:
                 job.scoring_raw_data = {}
+            if job.predicted_priority_score is None:
+                job.predicted_priority_score = 0.0
+            if job.predicted_close_risk_score is None:
+                job.predicted_close_risk_score = 0.0
+            if job.predicted_response_score is None:
+                job.predicted_response_score = 0.0
+            if job.prediction_confidence is None:
+                job.prediction_confidence = 0.0
+            if job.prediction_evidence is None:
+                job.prediction_evidence = {}
 
             if (
                 job.verification_status == "unknown"

@@ -34,6 +34,12 @@ class Settings:
         self.backend_port = int(os.getenv("BACKEND_PORT", "8000"))
         self.frontend_port = int(os.getenv("FRONTEND_PORT", "3000"))
         self.enable_sample_jobs = _parse_bool(os.getenv("ENABLE_SAMPLE_JOBS"), default=False)
+        self.ai_provider = (os.getenv("AI_PROVIDER", "mock") or "mock").strip().lower()
+        self.openai_api_key = (os.getenv("OPENAI_API_KEY", "") or "").strip()
+        self.openai_model = (os.getenv("OPENAI_MODEL", "") or "").strip() or "gpt-4.1-mini"
+        self.autofill_navigation_timeout_ms = int(os.getenv("CAREERAGENT_AUTOFILL_NAVIGATION_TIMEOUT_MS", "30000"))
+        self.autofill_review_timeout_seconds = int(os.getenv("CAREERAGENT_AUTOFILL_REVIEW_TIMEOUT_SECONDS", "90"))
+        self.autofill_slow_mo_ms = int(os.getenv("CAREERAGENT_AUTOFILL_SLOW_MO_MS", "50"))
 
     @property
     def cors_origins(self) -> list[str]:

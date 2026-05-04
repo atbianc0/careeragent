@@ -30,6 +30,9 @@ services:
       BACKEND_PORT: ${BACKEND_PORT:-8000}
       FRONTEND_PORT: ${FRONTEND_PORT:-3000}
       ENABLE_SAMPLE_JOBS: ${ENABLE_SAMPLE_JOBS:-false}
+      AI_PROVIDER: ${AI_PROVIDER:-mock}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:

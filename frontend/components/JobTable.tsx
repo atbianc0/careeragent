@@ -145,6 +145,11 @@ export function JobTable({
                     <Link href="/tracker" className="button secondary compact">
                       Tracker
                     </Link>
+                    {hasUrl ? (
+                      <Link href={`/autofill?jobId=${job.id}`} className="button secondary compact">
+                        Autofill
+                      </Link>
+                    ) : null}
                   </div>
                   <TrackingActions
                     job={job}
@@ -162,7 +167,8 @@ export function JobTable({
                       {job.application_status === "packet_ready" ? "Packet ready: Stage 6 live" : "Generate packet: Stage 6 live"}
                     </span>
                     <span className="status-tag status-open">Tracker logging: Stage 7 live</span>
-                    <span className="planned-chip">Autofill application: planned Stage 8</span>
+                    <span className="status-tag status-open">Autofill application: Stage 8 live</span>
+                    <span className="status-tag status-open">Prediction estimates: Stage 11 live</span>
                   </div>
                 </td>
               </tr>

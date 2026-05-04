@@ -3,12 +3,16 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { AutofillControls } from "@/components/AutofillControls";
 import { TrackingActions } from "@/components/TrackingActions";
 import {
   ApplicationEvent,
   ApplicationPacket,
   Job,
+  JobPredictionDetails,
   generatePacket,
+  getJob,
+  getJobPrediction,
   getJobTimeline,
   getPacketsForJob,
   scoreJob,
@@ -108,6 +112,36 @@ function formatTimelineEvent(event: ApplicationEvent) {
   return event.event_type;
 }
 
+function getNumberValue(record: Record<string, unknown> | undefined, key: string) {
+  const value = record?.[key];
+  return typeof value === "number" ? value : null;
+}
+
+function formatPredictionNumber(value: number | null | undefined) {
+  return typeof value === "number" ? value.toFixed(0) : "Not available";
+}
+
+function formatPredictionConfidence(value: number | null | undefined) {
+  return typeof value === "number" ? value.toFixed(2) : "Not available";
+}
+
+function getStringValue(record: Record<string, unknown> | undefined, key: string, fallback = "Not available") {
+  const value = record?.[key];
+  return typeof value === "string" && value ? value : fallback;
+}
+
+function getStringList(record: Record<string, unknown> | undefined, key: string) {
+  const value = record?.[key];
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+type PacketOptionToggleKey =
+  | "include_cover_letter"
+  | "include_recruiter_message"
+  | "include_application_questions"
+  | "compile_resume_pdf"
+  | "use_ai";
+
 export function JobDetailView({ initialJob }: JobDetailViewProps) {
   const [job, setJob] = useState<Job>(initialJob);
   const [verifying, setVerifying] = useState(false);
@@ -122,9 +156,14 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
     include_recruiter_message: true,
     include_application_questions: true,
     compile_resume_pdf: true,
+    use_ai: false,
+    provider: "mock",
   });
   const [timeline, setTimeline] = useState<ApplicationEvent[]>([]);
   const [loadingTimeline, setLoadingTimeline] = useState(true);
+  const [predictionDetails, setPredictionDetails] = useState<JobPredictionDetails | null>(null);
+  const [loadingPrediction, setLoadingPrediction] = useState(true);
+  const [predictionError, setPredictionError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const latestPacket = packets[0] || null;
@@ -132,6 +171,7 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
   useEffect(() => {
     void loadPackets();
     void loadTimeline();
+    void loadPrediction();
   }, [job.id]);
 
   async function loadPackets() {
@@ -157,6 +197,19 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load the job timeline.");
     } finally {
       setLoadingTimeline(false);
+    }
+  }
+
+  async function loadPrediction() {
+    setLoadingPrediction(true);
+    try {
+      const response = await getJobPrediction(job.id);
+      setPredictionDetails(response);
+      setPredictionError(null);
+    } catch (loadError) {
+      setPredictionError(loadError instanceof Error ? loadError.message : "Failed to load prediction details.");
+    } finally {
+      setLoadingPrediction(false);
     }
   }
 
@@ -192,7 +245,7 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
     try {
       const response = await scoreJob(job.id);
       setJob(response.job);
-      await loadTimeline();
+      await Promise.all([loadTimeline(), loadPrediction()]);
       setMessage(
         `Scoring updated: resume match ${response.score.resume_match_score}/100, priority ${response.score.overall_priority_score}/100.`,
       );
@@ -228,7 +281,7 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
     }
   }
 
-  function togglePacketOption(key: keyof typeof packetOptions) {
+  function togglePacketOption(key: PacketOptionToggleKey) {
     setPacketOptions((current) => ({
       ...current,
       [key]: !current[key],
@@ -237,8 +290,18 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
 
   function handleTrackedJobUpdated(updatedJob: Job) {
     setJob(updatedJob);
-    void Promise.all([loadPackets(), loadTimeline()]);
+    void Promise.all([loadPackets(), loadTimeline(), loadPrediction()]);
   }
+
+  async function refreshTrackedJob() {
+    const refreshedJob = await getJob(job.id);
+    setJob(refreshedJob);
+    await Promise.all([loadPackets(), loadTimeline(), loadPrediction()]);
+  }
+
+  const priorityPrediction = predictionDetails?.priority_prediction;
+  const closeRiskPrediction = predictionDetails?.close_risk_prediction;
+  const responsePrediction = predictionDetails?.response_likelihood_prediction;
 
   return (
     <div className="page">
@@ -396,6 +459,54 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
         </article>
 
         <article className="panel">
+          <h2>Prediction</h2>
+          <p className="subtle">
+            Stage 11 estimates are cautious and explainable. Recalculate saved prediction fields from the Predictions page.
+          </p>
+          {loadingPrediction ? <p className="subtle">Loading prediction details...</p> : null}
+          {predictionError ? <p className="message error">{predictionError}</p> : null}
+          <dl className="key-value">
+            <dt>Predicted Priority</dt>
+            <dd>{formatPredictionNumber(getNumberValue(priorityPrediction, "predicted_priority_score") ?? job.predicted_priority_score)}</dd>
+            <dt>Close Risk</dt>
+            <dd>{formatPredictionNumber(getNumberValue(closeRiskPrediction, "predicted_close_risk_score") ?? job.predicted_close_risk_score)}</dd>
+            <dt>Response Estimate</dt>
+            <dd>{formatPredictionNumber(getNumberValue(responsePrediction, "predicted_response_score") ?? job.predicted_response_score)}</dd>
+            <dt>Confidence</dt>
+            <dd>
+              {getStringValue(priorityPrediction, "confidence_label", "low")} (
+              {formatPredictionConfidence(getNumberValue(priorityPrediction, "confidence") ?? job.prediction_confidence)})
+            </dd>
+            <dt>Risk Label</dt>
+            <dd>{getStringValue(closeRiskPrediction, "risk_label", "unknown")}</dd>
+            <dt>Suggested Action</dt>
+            <dd>{getStringValue(priorityPrediction, "suggested_action", "manual_review").replace(/_/g, " ")}</dd>
+            <dt>Updated</dt>
+            <dd>{formatDateTime(predictionDetails?.stored_prediction.prediction_updated_at || job.prediction_updated_at)}</dd>
+          </dl>
+          {getStringValue(responsePrediction, "warning", "") ? (
+            <p className="subtle">{getStringValue(responsePrediction, "warning", "")}</p>
+          ) : null}
+          <h3>Prediction Evidence</h3>
+          {getStringList(priorityPrediction, "evidence").length > 0 ? (
+            renderItems(getStringList(priorityPrediction, "evidence"))
+          ) : (
+            <p className="subtle">No prediction evidence has been generated yet.</p>
+          )}
+          <h3>Close-Risk Evidence</h3>
+          {getStringList(closeRiskPrediction, "evidence").length > 0 ? (
+            renderItems(getStringList(closeRiskPrediction, "evidence"))
+          ) : (
+            <p className="subtle">No close-risk evidence has been generated yet.</p>
+          )}
+          <div className="button-row">
+            <Link href="/predictions" className="button secondary">
+              Open Predictions Page
+            </Link>
+          </div>
+        </article>
+
+        <article className="panel">
           <h2>Tracking</h2>
           <p className="subtle">
             Stage 7 tracks the application workflow. Open application links through CareerAgent to log the action, then
@@ -443,14 +554,14 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
           />
           <div className="planned-action-stack">
             <span className="status-tag status-open">Tracker logging: Stage 7 live</span>
-            <span className="planned-chip">Autofill Application: planned Stage 8</span>
+            <span className="status-tag status-open">Browser autofill: Stage 8 live</span>
           </div>
         </article>
 
         <article className="panel">
           <h2>Application Packet</h2>
           <p className="subtle">
-            Stage 6 generates reviewable application packets. It does not submit applications.
+            Stage 10 can optionally use AI drafts for packet materials, but every output remains reviewable and CareerAgent still does not submit applications.
           </p>
           <div className="checkbox-grid">
             <label className="checkbox-row">
@@ -485,7 +596,35 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
               />
               <span>Compile tailored resume PDF when LaTeX is available</span>
             </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={packetOptions.use_ai}
+                onChange={() => togglePacketOption("use_ai")}
+              />
+              <span>Use AI drafts for packet content</span>
+            </label>
           </div>
+          <label className="field-group">
+            <span>AI Provider</span>
+            <select
+              className="input"
+              value={packetOptions.provider}
+              onChange={(event) =>
+                setPacketOptions((current) => ({
+                  ...current,
+                  provider: event.target.value,
+                }))
+              }
+            >
+              <option value="mock">mock</option>
+              <option value="openai">openai</option>
+              <option value="local">local</option>
+            </select>
+            <span className="subtle">
+              AI drafts are optional, must stay truthful, and should never invent experience or credentials.
+            </span>
+          </label>
           <div className="button-row">
             <button className="button" type="button" onClick={handleGeneratePacket} disabled={generatingPacket}>
               {generatingPacket ? "Generating Packet..." : "Generate Application Packet"}
@@ -495,11 +634,13 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
                 Open Latest Packet
               </Link>
             ) : null}
-            <button className="button secondary" type="button" disabled>
-              Open Autofill — Planned Stage 8
-            </button>
+            <Link href={`/autofill?jobId=${job.id}`} className="button secondary">
+              Open Autofill Page
+            </Link>
           </div>
-          <p className="subtle">Review all generated materials manually before using them.</p>
+          <p className="subtle">
+            AI output is a draft. Review all generated materials manually before using them. Work authorization and sponsorship answers must come from your profile settings.
+          </p>
           {packetMessage ? <p className="message success">{packetMessage}</p> : null}
           {packetError ? <p className="message error">{packetError}</p> : null}
           {loadingPackets ? <p className="subtle">Loading packet history...</p> : null}
@@ -532,6 +673,20 @@ export function JobDetailView({ initialJob }: JobDetailViewProps) {
           ) : !loadingPackets ? (
             <p className="subtle">No packets generated for this job yet.</p>
           ) : null}
+        </article>
+
+        <article className="panel">
+          <h2>Autofill</h2>
+          <p className="subtle">
+            Stage 8 opens a visible Chromium browser, fills safe high-confidence fields, uploads packet files when
+            available, and always stops before submit.
+          </p>
+          <AutofillControls
+            job={job}
+            initialPackets={packets}
+            initialPacketId={latestPacket?.id ?? null}
+            onAutofillComplete={refreshTrackedJob}
+          />
         </article>
 
         <article className="panel">

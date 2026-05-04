@@ -9,7 +9,7 @@ It is designed to help users:
 - score jobs by fit and availability
 - generate tailored application packets
 - track applications and outcomes
-- eventually assist with browser autofill in Chromium
+- assist with safe browser autofill in Chromium while stopping before submit
 
 CareerAgent must never auto-submit job applications.
 
@@ -19,7 +19,7 @@ CareerAgent must never invent experience, skills, credentials, companies, dates,
 
 ## Current Stage
 
-**Stage 7 — Tracker + Action Logging**
+**Stage 11 — Prediction and Improvements**
 
 - Stage 1: Complete
 - Stage 2: Complete
@@ -28,12 +28,14 @@ CareerAgent must never invent experience, skills, credentials, companies, dates,
 - Stage 5: Complete
 - Stage 6: Complete
 - Stage 7: Complete
+- Stage 8: Complete
+- Stage 9: Complete
+- Stage 10: Complete
+- Stage 11: Complete
 
-Next Stage: **Stage 8 — Browser Autofill with Playwright**
+Stage 11 adds cautious, explainable prediction estimates on top of the completed parsing, packet, tracker, autofill, market, and AI-provider workflow. CareerAgent now uses stored local history to estimate priority, close risk, source quality, role quality, response likelihood, and apply windows while clearly labeling confidence and small-sample limits.
 
-Stage 7 adds application tracking, timeline logging, manual outcome updates, follow-up reminders inside the app, tracker summary APIs, and tracker-aware UI pages on top of the completed Stage 6 packet workflow.
-
-## Stage 7 Features
+## Features Through Stage 11
 
 - Generate a private per-job packet folder under `outputs/application_packets/`.
 - Generate `tailored_resume.tex` by minimally editing the source LaTeX resume while preserving structure and style.
@@ -56,8 +58,57 @@ Stage 7 adds application tracking, timeline logging, manual outcome updates, fol
 - Show a real Tracker page with grouped statuses, summary cards, upcoming follow-ups, and recent activity.
 - Show per-job timeline history on the job detail page.
 - Update dashboard stats from tracker data.
+- Preview a rule-based autofill plan before opening the browser.
+- Launch a visible Chromium session with Playwright when the environment supports headed automation.
+- Detect common application fields using explainable rule-based matching.
+- Fill only safe, high-confidence factual fields.
+- Upload generated packet files such as `tailored_resume.pdf` when available.
+- Skip low-confidence, unknown, or sensitive fields unless the policy explicitly allows a conservative “Prefer not to answer” response.
+- Detect final submit/apply/confirm actions and never click them.
+- Log `autofill_started` and `autofill_completed` tracker events.
+- Update job status to `autofill_started` and `autofill_completed` without ever marking the job applied automatically.
+- Show autofill summaries and warnings in the frontend.
+- Show pipeline summary cards for total, verified, scored, packet-ready, opened, applied, interview, rejected, and offer-stage jobs.
+- Break down jobs by role, company, location, source, verification status, and application status.
+- Surface top requested skills and top missing skills from stored parsing and scoring data.
+- Show score analytics, including averages, distribution buckets, and top and low scored jobs.
+- Show verification analytics, outcome analytics, and observed response rates with small-sample warnings.
+- Show observed activity over time for imports, verification, scoring, packets, application opens, applies, interviews, rejections, and offers.
+- Flag stale and likely closed jobs with conservative recommendations such as reverify, deprioritize, or mark closed before apply.
+- Generate rule-based insights without pretending to predict future performance.
+- Export safe job and application metadata to JSON or CSV without including private profile, resume, or packet contents.
+- Add an AI provider abstraction with MockProvider, OpenAIProvider, and a LocalLLMProvider placeholder.
+- Keep MockProvider available with no API key so the app remains fully testable and usable offline from external AI services.
+- Add an AI status endpoint and provider test endpoint without exposing secrets.
+- Allow optional AI job parsing while keeping rule-based parsing as the default fallback.
+- Allow optional AI packet drafting for cover letters, recruiter messages, application questions, and conservative resume-tailoring advisory notes.
+- Allow optional AI market insight summaries while preserving the Stage 9 rule-based insight path.
+- Run review-required safety checks on AI-generated content before it is used in packets or insight summaries.
+- Keep all AI usage optional and never require an API key for the app to start or function.
+- Estimate predicted application priority from existing priority scores, source quality, role quality, response likelihood, close risk, packet readiness, stale signals, and application status.
+- Estimate close risk with conservative labels such as low, medium, high, closed, or unknown.
+- Estimate response likelihood from stored applied-job outcomes when enough history exists, and warn when history is too small.
+- Score source quality and role quality from historical outcomes with small-sample warnings.
+- Estimate apply windows from imported, posted, applied, and response-history weekdays when enough data exists.
+- Store prediction scores, confidence, evidence, and update timestamps on job records.
+- Recalculate prediction scores for all jobs.
+- Show a Predictions dashboard with top priority jobs, close-risk jobs, response likelihood, source quality, role quality, apply windows, insights, and exports.
+- Export prediction-safe JSON or CSV without private profile, resume, notes, packet contents, generated files, API keys, or secrets.
 - Keep Stage 1 through Stage 5 features intact, including profile editing, resume editing, import, verification, scoring, and ranked recommendations.
 - Keep generated outputs private and gitignored.
+
+## Stage 11 Implemented
+
+- Predicted application priority
+- Close-risk estimates
+- Response-likelihood estimates
+- Source quality scoring
+- Role quality scoring
+- Apply-window estimates from collected history
+- Prediction confidence and evidence
+- Recalculate predictions
+- Prediction dashboard
+- Prediction export
 
 ## Core Safety Principles
 
@@ -84,8 +135,11 @@ CareerAgent is being built toward a custom AI agent workflow, not just a set of 
 9. CareerAgent opens the application page in Chromium, fills safe fields, uploads the correct files, drafts answers in the user’s writing style, and stops before final submission.
 10. The user manually reviews and submits.
 11. CareerAgent tracks the application and follow-up status.
+12. CareerAgent summarizes job-market and personal application trends so the user can decide where and when to apply next.
+13. CareerAgent uses optional AI providers to improve parsing, tailoring, application drafts, and insights while keeping everything reviewable and safe.
+14. CareerAgent uses collected history to improve recommendations and make cautious predictions.
 
-At the end of this Stage 7 pass, setup, import, parsing, saved-job persistence, rule-based verification, rule-based scoring, packet generation, tracker logging, manual application status updates, and follow-up tracking are implemented. Browser autofill is still a future stage.
+At the end of this Stage 11 pass, setup, import, parsing, saved-job persistence, rule-based verification, rule-based scoring, packet generation, tracker logging, manual application status updates, follow-up tracking, autofill previews, safe headed browser autofill, market analytics dashboards, optional AI provider integration, and cautious prediction estimates are implemented. Final submission is still always manual.
 
 ## Tech Stack
 
@@ -93,9 +147,9 @@ At the end of this Stage 7 pass, setup, import, parsing, saved-job persistence, 
 - Backend: FastAPI
 - Database: PostgreSQL
 - Local development: Docker Compose
-- Browser automation later: Playwright
+- Browser automation: Playwright
 - Resume generation: LaTeX
-- AI integration later: placeholder/mock provider first, OpenAI later
+- AI integration: MockProvider by default, optional OpenAIProvider, and a LocalLLMProvider placeholder
 
 ## How To Run Locally
 
@@ -105,35 +159,49 @@ At the end of this Stage 7 pass, setup, import, parsing, saved-job persistence, 
 cp .env.example .env
 ```
 
-2. Optional: if you want demo/sample jobs in an empty local database, set this in `.env`:
+2. Optional: configure AI in your private `.env` if you want OpenAI instead of MockProvider:
+
+```bash
+AI_PROVIDER=openai
+OPENAI_API_KEY=your_key_here
+OPENAI_MODEL=your_model_here
+```
+
+If you skip this, CareerAgent uses `AI_PROVIDER=mock` and still works normally with no API key.
+
+3. Optional: if you want demo/sample jobs in an empty local database, set this in `.env`:
 
 ```bash
 ENABLE_SAMPLE_JOBS=true
 ```
 
-3. Copy the safe public profile template to your private local profile file:
+4. Copy the safe public profile template to your private local profile file:
 
 ```bash
 cp data/profile.example.yaml data/profile.yaml
 ```
 
-4. Copy the safe public resume template to your private local resume file:
+The committed example profile is intentionally neutral. It does not include real education details and does not auto-answer work authorization, sponsorship, or relocation questions. Put only your own truthful answers in `data/profile.yaml`.
+
+5. Copy the safe public resume template to your private local resume file:
 
 ```bash
 cp data/resume/base_resume.example.tex data/resume/base_resume.tex
 ```
 
-5. Start the stack:
+6. Start the stack:
 
 ```bash
 docker compose up --build
 ```
 
-6. Open:
+7. Open:
 
 - Frontend: [http://localhost:3000](http://localhost:3000)
 - Profile page: [http://localhost:3000/profile](http://localhost:3000/profile)
 - Resume page: [http://localhost:3000/resume](http://localhost:3000/resume)
+- AI page: [http://localhost:3000/ai](http://localhost:3000/ai)
+- Predictions page: [http://localhost:3000/predictions](http://localhost:3000/predictions)
 - Backend: [http://localhost:8000](http://localhost:8000)
 - Health check: [http://localhost:8000/health](http://localhost:8000/health)
 
@@ -141,12 +209,60 @@ If `data/profile.yaml` or `data/resume/base_resume.tex` do not exist yet, the ap
 
 If LaTeX is not installed, the resume compile endpoint stays available and returns a clear message instead of crashing the backend.
 
-If you are upgrading from an older local database, CareerAgent adds the Stage 3 through Stage 7 job, packet, and tracker columns automatically on startup. If you want a clean local reset instead, run:
+If Playwright Chromium is not installed yet, install it with:
+
+```bash
+python -m playwright install chromium
+```
+
+If headed Chromium does not appear inside Docker on macOS, use the normal Docker stack for the rest of the app and run the backend locally outside Docker for autofill testing, or configure host display forwarding for Playwright. CareerAgent is honest about this limitation and still returns a clear environment warning from the autofill status endpoint.
+
+If you are upgrading from an older local database, CareerAgent adds the Stage 3 through Stage 11 job, packet, tracker, autofill, market, AI-supporting, and prediction fields automatically on startup. If you want a clean local reset instead, run:
 
 ```bash
 docker compose down -v
 docker compose up --build
 ```
+
+## Stage 10 AI Provider Setup
+
+CareerAgent works without any API key using MockProvider.
+
+To enable OpenAI safely:
+
+1. Copy `.env.example` to `.env`.
+2. Set:
+
+```bash
+AI_PROVIDER=openai
+OPENAI_API_KEY=your_key_here
+OPENAI_MODEL=your_model_here
+```
+
+3. Restart the app.
+
+Important:
+
+- `.env` is gitignored.
+- Never commit API keys.
+- Do not put API keys in `profile.yaml`.
+- Do not put API keys in source code.
+- The frontend never receives the key.
+- The app works without a key using MockProvider.
+
+## Stage 11 Prediction Limitations
+
+- AI outputs are drafts and must be reviewed manually.
+- Safety checks are conservative but not perfect.
+- AI should not be trusted for legal, visa, sponsorship, or demographic answers.
+- Work authorization and sponsorship answers must come from profile settings.
+- Resume structure and style must still be preserved.
+- Predictions are estimates only.
+- Small datasets are unreliable.
+- Response likelihood requires applied jobs and outcomes.
+- Apply-window estimates are based only on collected CareerAgent history.
+- CareerAgent does not guarantee interviews, offers, responses, or ideal timing.
+- The user should manually review all recommendations.
 
 ## Public GitHub Safety
 
@@ -168,6 +284,7 @@ docker compose up --build
   - API keys or tokens
   - real personal resume/profile data
 - The app should never require private local files to be committed in order to run.
+- The app should never expose API keys through the frontend or API responses.
 
 Helpful setup commands:
 
@@ -228,7 +345,7 @@ Only the example/template files should appear as tracked private-data matches. I
 
 CareerAgent should preserve the user’s original LaTeX resume structure, section order, commands, formatting, spacing, fonts, margins, and visual style. Tailoring should be content-only unless the user explicitly asks for design changes. Tailored resumes should be made by minimally editing `base_resume.tex`, not by replacing it with a new template.
 
-## Stage 3, Stage 4, Stage 5, Stage 6, and Stage 7 Usage
+## Stage 3 Through Stage 11 Usage
 
 ### Job import workflow
 
@@ -284,19 +401,64 @@ CareerAgent should preserve the user’s original LaTeX resume structure, sectio
 8. Add notes or set follow-up reminders as needed.
 9. Update the status again when an interview, rejection, offer, withdrawal, or closed-before-apply outcome happens.
 
-### Stage 7 limitations
+### Stage 8 autofill workflow
+
+1. Make sure profile data exist locally, or let CareerAgent fall back to the committed example profile.
+2. Import, verify, and score a job with a saved application URL.
+3. Generate an application packet for that job when you want uploadable materials ready.
+4. Open the job detail page, the packet detail page, or `/autofill`.
+5. Click `Preview Autofill Plan`.
+6. Review the proposed values, uploadable files, and warnings.
+7. Click `Start Autofill in Browser`.
+8. Review the visible Chromium window manually.
+9. Manually click submit only after reviewing the form yourself.
+10. Return to CareerAgent and manually mark the job applied from the tracker after you really submit it.
+
+### Stage 9 market analytics workflow
+
+1. Import jobs.
+2. Verify and score them so CareerAgent has enough structured data to analyze.
+3. Generate packets and track applications when you start applying.
+4. Open `/market`.
+5. Review the pipeline summary, skill trends, score analytics, outcomes, activity, stale jobs, and insights.
+6. Export JSON or CSV if you want to do your own personal analysis outside the app.
+
+### Stage 10 AI workflow
+
+1. Open `/ai`.
+2. Confirm MockProvider is active when no API key is configured.
+3. Run the provider test form with `mock`.
+4. To use OpenAI, set `AI_PROVIDER=openai`, `OPENAI_API_KEY`, and optionally `OPENAI_MODEL` in private `.env`, then restart the app.
+5. Use optional AI parsing on `/jobs` only when you want a reviewable enhanced parse.
+6. Use optional AI drafts from a job detail page when generating packet materials.
+7. Use optional AI insights from `/market` when you want a short draft summary of stored analytics.
+
+### Stage 11 prediction workflow
+
+1. Import jobs.
+2. Verify and score jobs.
+3. Generate packets for jobs you are seriously considering.
+4. Track application outcomes such as applied, interview, rejected, and offer.
+5. Open `/predictions`.
+6. Click `Recalculate Predictions`.
+7. Review high-priority jobs and high close-risk jobs.
+8. Review source quality, role quality, response likelihood, and apply-window estimates.
+9. Export JSON or CSV if you want a safe local prediction dataset.
+10. Use predictions as guidance, not guarantees.
+
+### Stage 11 limitations
 
 - URL parsing is basic and may not work on JavaScript-heavy job pages.
 - Verification is rule-based and approximate.
 - Scoring is also rule-based and approximate.
-- Stage 6 generation is deterministic/mock unless an optional AI provider is added later.
+- Stage 6 deterministic generation remains the fallback; Stage 10 AI drafts are optional and off by default.
 - Tailored resume edits are intentionally conservative to preserve structure and avoid invented claims.
 - Cover letter and recruiter message drafts may still need meaningful editing.
-- Packet generation does not submit applications and does not autofill browser forms.
+- Packet generation does not submit applications; autofill is a separate Stage 8 step and still stops before submit.
 - PDF compilation depends on local or container LaTeX availability.
 - If LaTeX is unavailable, packet generation still succeeds and stores the `.tex` source with a graceful warning.
 - User review is required before trusting or using any generated content.
-- Scoring does not use AI yet.
+- Scoring remains deterministic in Stage 10 and does not use AI yet.
 - Scoring may miss skills or context that are not obvious in the parsed text or base resume text.
 - Scores do not guarantee interview chances or application outcomes.
 - Some job boards block requests or expose too little text for a confident check.
@@ -307,15 +469,55 @@ CareerAgent should preserve the user’s original LaTeX resume structure, sectio
 - The user must manually mark a job as applied.
 - Follow-up reminders are tracked in the app but are not scheduled notifications yet.
 - Calendar and email integrations are still future improvements.
-- Browser autofill is still Stage 8 and will still stop before final submission.
+- Autofill is rule-based and may miss fields or misclassify unusual layouts.
+- Some job sites require login or block automation before the real application form appears.
+- CareerAgent never bypasses CAPTCHAs, anti-bot protections, or login walls.
+- Headed browser display inside Docker may need extra setup on macOS; local backend execution may be the simplest autofill test path there.
+- CareerAgent still stops before final submission every time.
 - AI-assisted parsing is Stage 10.
 - Some parsed, verified, and scored fields will be imperfect because CareerAgent currently uses deterministic rule-based parsing, verification, and scoring instead of AI or browser automation.
+- Analytics are based only on data you have collected in CareerAgent.
+- Small sample sizes can be misleading, especially for response-rate groupings.
+- Response rates require jobs to be marked applied and to have later outcomes recorded.
+- Predictions are based only on data you have collected in CareerAgent.
+- Predicted priority, close risk, response likelihood, source quality, role quality, and apply windows are estimates only.
+- Small datasets are low confidence and may be misleading.
+- Response likelihood requires applied jobs and recorded outcomes.
+- Apply-window estimates are local observations, not universal best-day advice.
+- CareerAgent does not guarantee interviews, responses, offers, or application outcomes.
+- User review is required before acting on every recommendation.
 
-## What Works In Stage 7
+## What Works In Stage 11
 
 - `GET /health`
+- `GET /api/ai/status`
+- `GET /api/ai/providers`
+- `POST /api/ai/test`
+- `GET /api/market/dashboard`
 - `GET /api/market/summary`
+- `GET /api/market/skills`
+- `GET /api/market/scores`
+- `GET /api/market/outcomes`
+- `GET /api/market/activity`
+- `GET /api/market/stale-jobs`
+- `GET /api/market/insights`
+- `GET /api/market/insights?use_ai=true&provider=mock`
+- `GET /api/market/export?format=json`
+- `GET /api/market/export?format=csv`
+- `GET /api/prediction/dashboard`
+- `POST /api/prediction/recalculate`
+- `GET /api/prediction/jobs`
+- `GET /api/prediction/jobs/{job_id}`
+- `GET /api/prediction/source-quality`
+- `GET /api/prediction/role-quality`
+- `GET /api/prediction/apply-windows`
+- `GET /api/prediction/insights`
+- `GET /api/prediction/export?format=json`
+- `GET /api/prediction/export?format=csv`
 - `GET /api/autofill/status`
+- `GET /api/autofill/safety`
+- `POST /api/autofill/dry-run`
+- `POST /api/autofill/start`
 - `GET /api/profile`
 - `PUT /api/profile`
 - `POST /api/profile/create-private`
@@ -327,7 +529,10 @@ CareerAgent should preserve the user’s original LaTeX resume structure, sectio
 - `GET /api/resume/status`
 - `GET /api/jobs`
 - `POST /api/jobs/parse`
+- `POST /api/jobs/parse` with `use_ai=false`
+- `POST /api/jobs/parse` with `use_ai=true` and `provider=mock`
 - `POST /api/jobs/import`
+- `POST /api/jobs/import` with optional `use_ai` and `provider`
 - `POST /api/jobs/verify-url`
 - `POST /api/jobs/verify-all`
 - `POST /api/jobs/score-all`
@@ -341,6 +546,7 @@ CareerAgent should preserve the user’s original LaTeX resume structure, sectio
 - `DELETE /api/jobs/{id}`
 - `GET /api/packets`
 - `POST /api/packets/generate`
+- `POST /api/packets/generate` with optional `use_ai` and `provider`
 - `GET /api/packets/{id}`
 - `GET /api/packets/job/{job_id}`
 - `GET /api/packets/{id}/file?file_key=cover_letter`
@@ -360,7 +566,7 @@ CareerAgent should preserve the user’s original LaTeX resume structure, sectio
 - `POST /api/tracker/jobs/{job_id}/follow-up/complete`
 - `POST /api/tracker/jobs/{job_id}/open-application`
 - `GET /api/tracker/events`
-- Real Stage 7 pages for jobs, tracker, packets, packet detail, and job timelines
+- Real Stage 11 pages for jobs, tracker, packets, packet detail, job timelines, browser autofill, market analytics, predictions, and AI provider status/testing
 
 ## Project Structure
 
@@ -475,47 +681,46 @@ careeragent/
 
 ### Stage 8: Browser Autofill with Playwright
 
+- Status: Complete
 - Launch headed Chromium.
 - Detect common application fields.
 - Fill high-confidence factual fields.
 - Draft/fill common questions when safe.
 - Prefer not to answer demographic questions by default.
 - Never click submit/apply/final confirmation buttons.
+- Log autofill start and completion events into the tracker.
+- Show autofill previews and browser-session summaries in the UI.
 
 ### Stage 9: Market Analytics Dashboard
 
-- Show jobs by week, role, company, location, source, skills, verification status, and response rate.
-- Track which jobs close fastest.
-- Prepare data for future prediction.
+- Status: Complete
+- Show a real analytics dashboard for pipeline, skills, score, verification, outcomes, response rates, activity, stale jobs, and insights.
+- Export safe analytics data to JSON and CSV for personal analysis.
+- Feed Stage 11 prediction estimates with stored analytics and outcomes.
 
 ### Stage 10: AI Provider Integration
 
-- Add provider pattern:
-  - `MockProvider`
-  - `OpenAIProvider`
-  - `LocalLLMProvider`
-- Use AI for job parsing, resume tailoring, cover letters, and application question drafts.
-- Keep outputs reviewable.
+- Status: Complete
+- Add provider pattern with `MockProvider`, `OpenAIProvider`, and a `LocalLLMProvider` placeholder.
+- Keep MockProvider available without API keys.
+- Use optional AI for job parsing, resume tailoring advice, cover letters, recruiter messages, application question drafts, and market insight summaries.
+- Keep rule-based parsing, deterministic packet generation, and rule-based insights as safe defaults and fallbacks.
+- Keep outputs reviewable and safety-checked.
 
 ### Stage 11: Prediction and Improvements
 
-- Predict best times to apply.
-- Predict likely-closed postings.
-- Improve priority scoring from application outcomes.
-- Improve source quality scoring.
-- Add better market trend models.
+- Status: Complete
+- Predict which jobs are most worth applying to first with cautious priority estimates.
+- Estimate close risk and likely stale postings.
+- Estimate response likelihood from stored applied-job outcomes when enough history exists.
+- Improve priority scoring with source quality, role quality, company history, packet readiness, stale signals, and application status.
+- Estimate source quality and role quality from historical outcomes with small-sample warnings.
+- Estimate apply windows from collected import, applied, and response history.
+- Keep all recommendations descriptive, reviewable, grounded in stored data, and labeled with confidence.
 
-## Next Stage
+## Beyond Stage 11
 
-**Next Stage: Stage 8 — Browser Autofill with Playwright**
-
-Stage 8 should:
-
-- open the application page in Chromium
-- fill safe high-confidence fields and upload the right files
-- stop before any final submit action
-- log autofill start and completion events into the Stage 7 tracker
-- preserve the no-auto-submit safety boundary
+Future stages can refine prediction feedback loops, follow-up planning, ATS coverage, local-model support, and reminder integrations while keeping CareerAgent human-in-the-loop and safe.
 
 ## Planned Improvements
 

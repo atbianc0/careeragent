@@ -1,4 +1,14 @@
 from .application_event import ApplicationEventCreate, ApplicationEventRead
+from .ai import AIProviderInfo, AIProviderResult, AIProvidersResponse, AIStatusResponse, AITestRequest
+from .autofill import (
+    AutofillFieldResult,
+    AutofillPreviewRequest,
+    AutofillPreviewResponse,
+    AutofillSafetyResponse,
+    AutofillStartRequest,
+    AutofillStartResponse,
+    AutofillStatusResponse,
+)
 from .application_packet import (
     ApplicationPacketCreate,
     ApplicationPacketFileResponse,
@@ -39,6 +49,18 @@ from .tracker import (
 __all__ = [
     "ApplicationEventCreate",
     "ApplicationEventRead",
+    "AIProviderInfo",
+    "AIProviderResult",
+    "AIProvidersResponse",
+    "AIStatusResponse",
+    "AITestRequest",
+    "AutofillFieldResult",
+    "AutofillPreviewRequest",
+    "AutofillPreviewResponse",
+    "AutofillSafetyResponse",
+    "AutofillStartRequest",
+    "AutofillStartResponse",
+    "AutofillStatusResponse",
     "ApplicationPacketCreate",
     "ApplicationPacketFileResponse",
     "ApplicationPacketGenerateRequest",

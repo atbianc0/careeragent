@@ -43,6 +43,8 @@ class ApplicationPacketGenerateRequest(BaseModel):
     include_recruiter_message: bool = True
     include_application_questions: bool = True
     compile_resume_pdf: bool = True
+    use_ai: bool = False
+    provider: str = "mock"
 
 
 class ApplicationPacketGenerateResponse(BaseModel):
