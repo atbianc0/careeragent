@@ -194,6 +194,7 @@ class JobParseResult(JobBase):
     input_type: Literal["description", "url"]
     parse_mode: str = "rule_based_v1"
     provider: str | None = None
+    parsing_status: Literal["full", "partial"] = "full"
     parsing_warnings: list[str] = Field(default_factory=list)
 
 

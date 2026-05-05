@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Iterator
 
 from sqlalchemy.orm import Session
 
@@ -23,6 +28,23 @@ SENSITIVE_OPTIONAL_FIELD_KEYS = {"race_ethnicity", "gender", "disability", "vete
 SKIPPED_ALWAYS_FIELD_KEYS = {"ssn", "date_of_birth", "unknown_sensitive"}
 DEFAULT_REVIEW_MESSAGE = (
     "Autofill completed. Please review everything manually. CareerAgent will not submit the application."
+)
+HEADLESS_REVIEW_MESSAGE = (
+    "Autofill attempted in headless mode. CareerAgent did not submit anything. Review the application manually in your browser before submitting."
+)
+HEADED_REVIEW_MESSAGE = "Review the browser manually. CareerAgent will not submit."
+DISPLAY_UNAVAILABLE_MESSAGE = (
+    "Headed Chromium cannot launch because the Docker container has no X server/display. "
+    "Set PLAYWRIGHT_HEADLESS=true or run the backend locally with a display."
+)
+DISPLAY_UNAVAILABLE_FIX = "Use headless mode in Docker, or run backend locally outside Docker for visible browser autofill."
+XSERVER_ERROR_MARKERS = (
+    "without having a xserver running",
+    "missing x server",
+    "$display",
+    "platform failed to initialize",
+    "no display",
+    "cannot open display",
 )
 
 
@@ -432,6 +454,71 @@ def preview_autofill_plan(
     }
 
 
+def _configured_browser_mode() -> str:
+    return "headless" if settings.playwright_headless else "headed"
+
+
+def _xvfb_available() -> bool:
+    return shutil.which("Xvfb") is not None
+
+
+def _headed_display_available() -> bool:
+    return bool(os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY") or (settings.playwright_use_xvfb and _xvfb_available()))
+
+
+def _is_browser_display_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in XSERVER_ERROR_MARKERS)
+
+
+def _concise_playwright_error(exc: Exception) -> str:
+    first_line = next((line.strip() for line in str(exc).splitlines() if line.strip()), "")
+    if not first_line:
+        first_line = exc.__class__.__name__
+    if len(first_line) > 260:
+        first_line = f"{first_line[:257]}..."
+    return f"Playwright could not complete the autofill session: {first_line}"
+
+
+@contextmanager
+def _xvfb_session_if_needed() -> Iterator[None]:
+    process: subprocess.Popen[bytes] | None = None
+    previous_display = os.getenv("DISPLAY")
+
+    if settings.playwright_headless or not settings.playwright_use_xvfb or previous_display:
+        yield
+        return
+
+    xvfb_path = shutil.which("Xvfb")
+    if not xvfb_path:
+        raise AutofillUnavailableError("PLAYWRIGHT_USE_XVFB=true, but Xvfb is not installed in this environment.")
+
+    display = ":99"
+    process = subprocess.Popen(
+        [xvfb_path, display, "-screen", "0", "1280x720x24", "-nolisten", "tcp"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    time.sleep(0.3)
+    if process.poll() is not None:
+        raise AutofillUnavailableError("Xvfb could not start, so headed Chromium has no display available.")
+
+    os.environ["DISPLAY"] = display
+    try:
+        yield
+    finally:
+        if previous_display is None:
+            os.environ.pop("DISPLAY", None)
+        else:
+            os.environ["DISPLAY"] = previous_display
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+
+
 def _get_playwright_support_status() -> dict[str, Any]:
     try:
         from playwright.sync_api import sync_playwright
@@ -440,6 +527,11 @@ def _get_playwright_support_status() -> dict[str, Any]:
             "playwright_installed": False,
             "chromium_installed": False,
             "headed_browser_supported": False,
+            "headed_display_available": False,
+            "configured_browser_mode": _configured_browser_mode(),
+            "playwright_headless": settings.playwright_headless,
+            "playwright_use_xvfb": settings.playwright_use_xvfb,
+            "playwright_slow_mo_ms": settings.playwright_slow_mo_ms,
         }
 
     chromium_installed = False
@@ -453,22 +545,49 @@ def _get_playwright_support_status() -> dict[str, Any]:
     return {
         "playwright_installed": True,
         "chromium_installed": chromium_installed,
-        "headed_browser_supported": chromium_installed,
+        "headed_browser_supported": chromium_installed and _headed_display_available(),
+        "headed_display_available": _headed_display_available(),
+        "configured_browser_mode": _configured_browser_mode(),
+        "playwright_headless": settings.playwright_headless,
+        "playwright_use_xvfb": settings.playwright_use_xvfb,
+        "playwright_slow_mo_ms": settings.playwright_slow_mo_ms,
     }
 
 
 def get_autofill_status() -> dict[str, Any]:
     support_status = _get_playwright_support_status()
-    status = "ready" if support_status["headed_browser_supported"] else "environment_warning"
+    if not support_status["playwright_installed"] or not support_status["chromium_installed"]:
+        status = "environment_warning"
+    elif settings.playwright_headless or support_status["headed_browser_supported"]:
+        status = "ready"
+    else:
+        status = "environment_warning"
+
+    browser_mode = _configured_browser_mode()
+    if browser_mode == "headless":
+        message = (
+            "CareerAgent is configured for headless Chromium. It can fill safe high-confidence fields, "
+            "but you must open the application manually, review everything, and submit yourself."
+        )
+        environment_note = (
+            "Docker on macOS usually has no X server/display, so Docker defaults to PLAYWRIGHT_HEADLESS=true. "
+            "Run the backend locally with PLAYWRIGHT_HEADLESS=false for visible browser review."
+        )
+    else:
+        message = (
+            "CareerAgent is configured for headed Chromium. It fills safe high-confidence fields and always stops before final submit."
+        )
+        environment_note = (
+            "Headed Chromium requires a display/XServer. If it fails in Docker, set PLAYWRIGHT_HEADLESS=true or run the backend locally outside Docker."
+        )
+
     return {
         "status": status,
         "stage": "Stage 8 - Browser Autofill with Playwright",
-        "message": "CareerAgent opens a visible Chromium browser, fills safe high-confidence fields, uploads packet files when available, and always stops before final submit.",
+        "message": message,
         "manual_review_required": True,
         "install_command": "python -m playwright install chromium",
-        "environment_note": (
-            "Headed Playwright sessions may need extra display setup in Docker on macOS. If the browser window does not appear, run the backend locally outside Docker for autofill testing."
-        ),
+        "environment_note": environment_note,
         "recent_sessions": get_recent_session_summaries(),
         **support_status,
     }
@@ -628,6 +747,8 @@ def start_autofill_session(
 
     sync_playwright, PlaywrightError, PlaywrightTimeoutError = _load_playwright()
     review_timeout_ms = max(settings.autofill_review_timeout_seconds, 0) * 1000
+    headless = settings.playwright_headless
+    browser_mode = _configured_browser_mode()
 
     initial_status = job.application_status
     started_logged = False
@@ -637,12 +758,14 @@ def start_autofill_session(
     blocked_actions: list[str] = []
     files_uploaded: list[str] = []
     fields_filled = 0
+    warnings.append(HEADLESS_REVIEW_MESSAGE if headless else HEADED_REVIEW_MESSAGE)
 
     try:
-        with sync_playwright() as playwright:
+        with _xvfb_session_if_needed(), sync_playwright() as playwright:
             browser = playwright.chromium.launch(
-                headless=False,
-                slow_mo=settings.autofill_slow_mo_ms,
+                headless=headless,
+                slow_mo=settings.playwright_slow_mo_ms,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
             )
             context_manager = browser.new_context()
             page = context_manager.new_page()
@@ -673,6 +796,9 @@ def start_autofill_session(
             blocked_actions = _detect_blocked_actions(page)
 
             allow_sensitive_optional = bool(resolved_options.get("fill_sensitive_optional_fields"))
+            if headless and allow_sensitive_optional:
+                warnings.append("Headless mode skips sensitive optional fields even when optional EEO autofill is requested.")
+                allow_sensitive_optional = False
 
             for field in fields_detected:
                 field_key = str(field.get("field_key") or "unknown_question")
@@ -771,14 +897,16 @@ def start_autofill_session(
                     }
                 )
 
-            if review_timeout_ms > 0:
+            if not headless and review_timeout_ms > 0:
                 page.wait_for_timeout(review_timeout_ms)
 
             summary_status = "autofill_completed"
             summary = {
+                "success": True,
                 "job_id": job.id,
                 "packet_id": packet.id if packet else None,
                 "status": summary_status,
+                "browser_mode": browser_mode,
                 "opened_url": page.url,
                 "fields_detected": len(fields_detected),
                 "fields_filled": fields_filled,
@@ -787,7 +915,7 @@ def start_autofill_session(
                 "blocked_actions": blocked_actions,
                 "warnings": warnings,
                 "manual_review_required": True,
-                "message": DEFAULT_REVIEW_MESSAGE,
+                "message": HEADLESS_REVIEW_MESSAGE if headless else DEFAULT_REVIEW_MESSAGE,
                 "field_results": field_results,
             }
 
@@ -803,6 +931,7 @@ def start_autofill_session(
                 old_status=status_before_completion if started_logged else initial_status,
                 new_status=job.application_status,
                 metadata_json={
+                    "browser_mode": summary["browser_mode"],
                     "fields_detected": summary["fields_detected"],
                     "fields_filled": summary["fields_filled"],
                     "files_uploaded": summary["files_uploaded"],
@@ -819,16 +948,39 @@ def start_autofill_session(
     except PlaywrightTimeoutError as exc:
         raise AutofillUnavailableError("The browser timed out while interacting with the application page.") from exc
     except PlaywrightError as exc:
-        raise AutofillUnavailableError(f"Playwright could not complete the autofill session: {exc}") from exc
+        if _is_browser_display_error(exc):
+            summary = {
+                "success": False,
+                "job_id": job.id,
+                "packet_id": packet.id if packet else None,
+                "status": "browser_display_unavailable",
+                "browser_mode": browser_mode,
+                "opened_url": job.url,
+                "fields_detected": len(fields_detected),
+                "fields_filled": fields_filled,
+                "fields_skipped": max(len(fields_detected) - fields_filled, 0),
+                "files_uploaded": files_uploaded,
+                "blocked_actions": blocked_actions,
+                "warnings": warnings,
+                "manual_review_required": True,
+                "message": DISPLAY_UNAVAILABLE_MESSAGE,
+                "suggested_fix": DISPLAY_UNAVAILABLE_FIX,
+                "field_results": field_results,
+            }
+            save_session_summary(summary)
+            return summary
+        raise AutofillUnavailableError(_concise_playwright_error(exc)) from exc
     except Exception as exc:
         raise AutofillError(f"Autofill could not complete safely: {exc}") from exc
     finally:
         if started_logged and not completed_logged:
             save_session_summary(
                 {
+                    "success": False,
                     "job_id": job.id,
                     "packet_id": packet.id if packet else None,
                     "status": "autofill_started",
+                    "browser_mode": browser_mode,
                     "opened_url": job.url,
                     "fields_detected": len(fields_detected),
                     "fields_filled": fields_filled,

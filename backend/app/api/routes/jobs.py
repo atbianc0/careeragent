@@ -50,7 +50,7 @@ def preview_job_parse(payload: JobImportRequest) -> JobParseResult:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    parsed_job["source"] = payload.source
+    _apply_import_source(parsed_job, payload)
     parsed_job["input_type"] = payload.input_type
     return parsed_job
 
@@ -64,13 +64,15 @@ def import_job(payload: JobImportRequest, db: Session = Depends(get_db)) -> JobR
 
     parse_mode = str(parsed_job.pop("parse_mode", "rule_based") or "rule_based")
     parsing_provider = parsed_job.pop("provider", None)
+    parsing_status = str(parsed_job.pop("parsing_status", "full") or "full")
     parsing_warnings = list(parsed_job.pop("parsing_warnings", []) or [])
     raw_parsed_data = dict(parsed_job.get("raw_parsed_data") or {})
     raw_parsed_data["parsing_mode"] = parse_mode
+    raw_parsed_data["parsing_status"] = parsing_status
     raw_parsed_data["ai_provider"] = parsing_provider
     raw_parsed_data["parsing_warnings"] = parsing_warnings
     parsed_job["raw_parsed_data"] = raw_parsed_data
-    parsed_job["source"] = payload.source
+    _apply_import_source(parsed_job, payload)
     job = create_job(db, parsed_job)
     log_event(
         db,
@@ -82,6 +84,7 @@ def import_job(payload: JobImportRequest, db: Session = Depends(get_db)) -> JobR
             "input_type": payload.input_type,
             "source": payload.source,
             "parse_mode": parse_mode,
+            "parsing_status": parsing_status,
             "provider": parsing_provider,
             "parsing_warnings": parsing_warnings,
         },
@@ -379,6 +382,13 @@ def _parse_job_import(payload: JobImportRequest) -> dict:
     if payload.input_type == "url":
         return parse_job_url(content, use_ai=payload.use_ai, provider_name=payload.provider)
     raise ValueError(f"Unsupported job input type: {payload.input_type}")
+
+
+def _apply_import_source(parsed_job: dict, payload: JobImportRequest) -> None:
+    if payload.source and payload.source != "manual":
+        parsed_job["source"] = payload.source
+        return
+    parsed_job["source"] = parsed_job.get("source") or payload.source
 
 
 def _verification_response_from_job(job) -> JobVerificationResult:

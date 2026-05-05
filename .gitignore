@@ -23,6 +23,7 @@ data/resume/base_resume.tex
 outputs/
 outputs/application_packets/
 outputs/resume/
+outputs/autofill_screenshots/
 application_packets/
 *.pdf
 

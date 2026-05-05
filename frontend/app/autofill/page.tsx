@@ -23,8 +23,8 @@ export default async function AutofillPage({
         <span className="eyebrow">Stage 8 - Browser Autofill with Playwright</span>
         <h1>Autofill</h1>
         <p className="hero-copy">
-          Launch a visible Chromium browser, preview CareerAgent’s safe autofill plan, upload generated packet files when
-          available, and stop before any final submit action.
+          Launch Chromium, preview CareerAgent’s safe autofill plan, upload generated packet files when available, and
+          stop before any final submit action.
         </p>
         <p className="hero-copy">
           CareerAgent never clicks Submit, Apply, Confirm, Finish, or similar final buttons. Manual review and manual

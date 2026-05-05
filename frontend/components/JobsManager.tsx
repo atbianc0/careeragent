@@ -81,6 +81,18 @@ function getRecommendationSummary(job: Job) {
   return evidence?.summary?.slice(0, 3) || [];
 }
 
+function isPartialParse(preview: JobParseResult) {
+  return preview.parsing_status === "partial";
+}
+
+function formatImportError(error: unknown, inputType: JobImportRequest["input_type"]) {
+  const baseMessage = error instanceof Error ? error.message : "Failed to parse or save the job.";
+  if (inputType !== "url") {
+    return baseMessage;
+  }
+  return `${baseMessage} Open the job in your browser, copy the full job description, and paste it into CareerAgent.`;
+}
+
 const defaultRequest: JobImportRequest = {
   input_type: "description",
   content: "",
@@ -160,7 +172,7 @@ export function JobsManager() {
       const response = await parseJobImport(form);
       setPreview(response);
     } catch (previewError) {
-      setError(previewError instanceof Error ? previewError.message : "Failed to preview the parsed job.");
+      setError(formatImportError(previewError, form.input_type));
     } finally {
       setSubmitting(false);
     }
@@ -183,14 +195,13 @@ export function JobsManager() {
           ? {
               ...currentPreview,
               ...response,
-              source: form.source,
               input_type: form.input_type,
             }
           : null,
       );
       await refreshData();
     } catch (importError) {
-      setError(importError instanceof Error ? importError.message : "Failed to import and save the job.");
+      setError(formatImportError(importError, form.input_type));
     } finally {
       setSubmitting(false);
     }
@@ -454,89 +465,103 @@ export function JobsManager() {
       <section className="panel">
         <div className="section-title">
           <h2>Parsed Preview</h2>
-          <span className="subtle">{preview ? preview.parse_mode : "Nothing parsed yet"}</span>
+          <span className="subtle">
+            {preview ? `${preview.parse_mode} • ${preview.parsing_status}` : "Nothing parsed yet"}
+          </span>
         </div>
         {preview ? (
-          <div className="panel-grid">
-            <article className="panel subtle-panel">
-              <dl className="key-value">
-                <dt>Company</dt>
-                <dd>{preview.company}</dd>
-                <dt>Title</dt>
-                <dd>{preview.title}</dd>
-                <dt>Location</dt>
-                <dd>{preview.location}</dd>
-                <dt>Source</dt>
-                <dd>{preview.source}</dd>
-                <dt>URL</dt>
-                <dd>{preview.url || "Not provided"}</dd>
-                <dt>Role Category</dt>
-                <dd>{preview.role_category || "Unknown"}</dd>
-                <dt>Seniority</dt>
-                <dd>{preview.seniority_level || "Unknown"}</dd>
-                <dt>Remote Status</dt>
-                <dd>{preview.remote_status || "Unknown"}</dd>
-                <dt>Provider</dt>
-                <dd>{preview.provider || "rule_based"}</dd>
-                <dt>Salary</dt>
-                <dd>{formatSalaryRange(preview)}</dd>
-                <dt>Years Experience</dt>
-                <dd>{formatYearsExperience(preview)}</dd>
-              </dl>
-              {preview.parsing_warnings.length > 0 ? (
-                <>
-                  <h3>Parsing Warnings</h3>
-                  <ul className="list">
-                    {preview.parsing_warnings.map((warning) => (
-                      <li key={warning}>{warning}</li>
-                    ))}
-                  </ul>
-                </>
-              ) : null}
-            </article>
+          <div className="stack">
+            {isPartialParse(preview) ? (
+              <section className="warning-panel">
+                <h3>Partial Parse</h3>
+                <p>
+                  This page did not expose the full job text. CareerAgent inferred partial details from the URL. Paste
+                  the job description manually for better parsing.
+                </p>
+              </section>
+            ) : null}
 
-            <article className="panel subtle-panel">
-              <h3>Required Skills</h3>
-              <div className="pill-list">
-                {preview.required_skills.length > 0 ? (
-                  preview.required_skills.map((skill) => (
-                    <span className="pill" key={skill}>
-                      {skill}
-                    </span>
-                  ))
-                ) : (
-                  <span className="subtle">None found.</span>
-                )}
-              </div>
+            <div className="panel-grid">
+              <article className="panel subtle-panel">
+                <dl className="key-value">
+                  <dt>Company</dt>
+                  <dd>{preview.company || "Unknown"}</dd>
+                  <dt>Title</dt>
+                  <dd>{preview.title || "Unknown"}</dd>
+                  <dt>Location</dt>
+                  <dd>{preview.location || "Unknown"}</dd>
+                  <dt>Source</dt>
+                  <dd>{preview.source}</dd>
+                  <dt>URL</dt>
+                  <dd>{preview.url || "Not provided"}</dd>
+                  <dt>Role Category</dt>
+                  <dd>{preview.role_category || "Unknown"}</dd>
+                  <dt>Seniority</dt>
+                  <dd>{preview.seniority_level || "Unknown"}</dd>
+                  <dt>Remote Status</dt>
+                  <dd>{preview.remote_status || "Unknown"}</dd>
+                  <dt>Provider</dt>
+                  <dd>{preview.provider || "rule_based"}</dd>
+                  <dt>Salary</dt>
+                  <dd>{formatSalaryRange(preview)}</dd>
+                  <dt>Years Experience</dt>
+                  <dd>{formatYearsExperience(preview)}</dd>
+                </dl>
+                {preview.parsing_warnings.length > 0 ? (
+                  <>
+                    <h3>Parsing Warnings</h3>
+                    <ul className="list">
+                      {preview.parsing_warnings.map((warning) => (
+                        <li key={warning}>{warning}</li>
+                      ))}
+                    </ul>
+                  </>
+                ) : null}
+              </article>
 
-              <h3>Preferred Skills</h3>
-              <div className="pill-list">
-                {preview.preferred_skills.length > 0 ? (
-                  preview.preferred_skills.map((skill) => (
-                    <span className="pill" key={skill}>
-                      {skill}
-                    </span>
-                  ))
-                ) : (
-                  <span className="subtle">None found.</span>
-                )}
-              </div>
-            </article>
+              <article className="panel subtle-panel">
+                <h3>Required Skills</h3>
+                <div className="pill-list">
+                  {preview.required_skills.length > 0 ? (
+                    preview.required_skills.map((skill) => (
+                      <span className="pill" key={skill}>
+                        {skill}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="subtle">None found.</span>
+                  )}
+                </div>
 
-            <article className="panel subtle-panel">
-              <h3>Responsibilities</h3>
-              {renderItems(preview.responsibilities)}
-            </article>
+                <h3>Preferred Skills</h3>
+                <div className="pill-list">
+                  {preview.preferred_skills.length > 0 ? (
+                    preview.preferred_skills.map((skill) => (
+                      <span className="pill" key={skill}>
+                        {skill}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="subtle">None found.</span>
+                  )}
+                </div>
+              </article>
 
-            <article className="panel subtle-panel">
-              <h3>Requirements</h3>
-              {renderItems(preview.requirements)}
-            </article>
+              <article className="panel subtle-panel">
+                <h3>Responsibilities</h3>
+                {renderItems(preview.responsibilities)}
+              </article>
 
-            <article className="panel subtle-panel">
-              <h3>Application Questions</h3>
-              {renderItems(preview.application_questions)}
-            </article>
+              <article className="panel subtle-panel">
+                <h3>Requirements</h3>
+                {renderItems(preview.requirements)}
+              </article>
+
+              <article className="panel subtle-panel">
+                <h3>Application Questions</h3>
+                {renderItems(preview.application_questions)}
+              </article>
+            </div>
           </div>
         ) : (
           <p className="subtle">Use Preview Parse to inspect the structured fields before you save the job.</p>

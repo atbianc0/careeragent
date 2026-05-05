@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   type ApplicationPacket,
@@ -19,21 +19,35 @@ type AutofillControlsProps = {
   onAutofillComplete?: () => Promise<void> | void;
 };
 
+const EMPTY_PACKETS: ApplicationPacket[] = [];
+
 function serializePreviewValues(values: Record<string, unknown>) {
   return JSON.stringify(values, null, 2);
 }
 
+function getPacketsKey(packets: ApplicationPacket[]) {
+  return packets.map((packet) => `${packet.id}:${packet.generation_status}:${packet.updated_at}`).join(",");
+}
+
+function getPreferredPacketId(packets: ApplicationPacket[], initialPacketId: number | null) {
+  if (initialPacketId !== null && packets.some((packet) => packet.id === initialPacketId)) {
+    return initialPacketId;
+  }
+  return packets[0]?.id ?? null;
+}
+
 export function AutofillControls({
   job,
-  initialPackets = [],
+  initialPackets = EMPTY_PACKETS,
   initialPacketId = null,
   onAutofillComplete,
 }: AutofillControlsProps) {
-  const [packets, setPackets] = useState<ApplicationPacket[]>(initialPackets);
+  const initialPacketsKey = useMemo(() => getPacketsKey(initialPackets), [initialPackets]);
+  const [packets, setPackets] = useState<ApplicationPacket[]>(() => initialPackets);
   const [loadingPackets, setLoadingPackets] = useState(initialPackets.length === 0);
   const [packetError, setPacketError] = useState<string | null>(null);
   const [selectedPacketId, setSelectedPacketId] = useState<number | null>(
-    initialPacketId ?? initialPackets[0]?.id ?? null,
+    () => getPreferredPacketId(initialPackets, initialPacketId),
   );
   const [allowBaseResumeUpload, setAllowBaseResumeUpload] = useState(false);
   const [fillSensitiveOptionalFields, setFillSensitiveOptionalFields] = useState(false);
@@ -42,26 +56,31 @@ export function AutofillControls({
   const [busyAction, setBusyAction] = useState<"preview" | "start" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const packetsKey = useMemo(() => getPacketsKey(packets), [packets]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadPackets() {
       setLoadingPackets(true);
+      setPacketError(null);
+      setPackets((currentPackets) => {
+        if (getPacketsKey(currentPackets) === initialPacketsKey) {
+          return currentPackets;
+        }
+        return initialPackets;
+      });
+
       try {
         const response = await getPacketsForJob(job.id);
         if (cancelled) {
           return;
         }
-        setPackets(response);
-        setSelectedPacketId((current) => {
-          if (initialPacketId) {
-            return initialPacketId;
+        setPackets((currentPackets) => {
+          if (getPacketsKey(currentPackets) === getPacketsKey(response)) {
+            return currentPackets;
           }
-          if (current && response.some((packet) => packet.id === current)) {
-            return current;
-          }
-          return response[0]?.id ?? null;
+          return response;
         });
         setPacketError(null);
       } catch (loadError) {
@@ -76,18 +95,28 @@ export function AutofillControls({
       }
     }
 
-    setPackets(initialPackets);
-    setSelectedPacketId(initialPacketId ?? initialPackets[0]?.id ?? null);
-    setPreview(null);
-    setSummary(null);
-    setMessage(null);
-    setError(null);
     void loadPackets();
 
     return () => {
       cancelled = true;
     };
-  }, [job.id, initialPacketId, initialPackets]);
+  }, [job.id, initialPacketsKey]);
+
+  useEffect(() => {
+    setSelectedPacketId((currentSelected) => {
+      if (currentSelected !== null && packets.some((packet) => packet.id === currentSelected)) {
+        return currentSelected;
+      }
+      return getPreferredPacketId(packets, initialPacketId);
+    });
+  }, [job.id, initialPacketId, packetsKey]);
+
+  useEffect(() => {
+    setPreview(null);
+    setSummary(null);
+    setMessage(null);
+    setError(null);
+  }, [job.id, selectedPacketId]);
 
   const canAutofill = Boolean(job.url.trim());
 
@@ -126,7 +155,12 @@ export function AutofillControls({
       const response = await startAutofill(buildPayload());
       setSummary(response);
       setPreview(null);
-      setMessage(response.message);
+      if (response.success === false || response.status === "browser_display_unavailable") {
+        setError(response.message);
+        setMessage(null);
+      } else {
+        setMessage(response.message);
+      }
       await onAutofillComplete?.();
     } catch (startError) {
       setError(startError instanceof Error ? startError.message : "Failed to start browser autofill.");
@@ -233,9 +267,33 @@ export function AutofillControls({
       {summary ? (
         <div className="stack">
           <h3>Autofill Result</h3>
+          {summary.browser_mode === "headless" && summary.success ? (
+            <section className="warning-panel">
+              <strong>Manual review required</strong>
+              <p>
+                Autofill ran in headless mode. CareerAgent did not submit anything. Open the application manually and
+                review before submitting.
+              </p>
+            </section>
+          ) : null}
+          {summary.status === "browser_display_unavailable" ? (
+            <section className="warning-panel">
+              <strong>Browser display unavailable</strong>
+              <p>
+                Headed Chromium cannot run inside this Docker container because there is no display/XServer. Set{" "}
+                <code>PLAYWRIGHT_HEADLESS=true</code> in <code>.env</code> or run the backend locally outside Docker
+                for visible browser autofill.
+              </p>
+              {summary.suggested_fix ? <p>{summary.suggested_fix}</p> : null}
+            </section>
+          ) : null}
           <dl className="key-value compact-key-value">
+            <dt>Success</dt>
+            <dd>{summary.success ? "Yes" : "No"}</dd>
             <dt>Status</dt>
             <dd>{summary.status}</dd>
+            <dt>Browser Mode</dt>
+            <dd>{summary.browser_mode}</dd>
             <dt>Opened URL</dt>
             <dd>{summary.opened_url}</dd>
             <dt>Fields Detected</dt>

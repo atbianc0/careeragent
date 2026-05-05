@@ -203,6 +203,7 @@ export type JobParseResult = {
   input_type: "description" | "url";
   parse_mode: string;
   provider: string | null;
+  parsing_status: "full" | "partial";
   parsing_warnings: string[];
 };
 
@@ -804,6 +805,11 @@ export type AutofillStatus = {
   playwright_installed: boolean;
   chromium_installed: boolean;
   headed_browser_supported: boolean;
+  headed_display_available: boolean;
+  configured_browser_mode: string;
+  playwright_headless: boolean;
+  playwright_use_xvfb: boolean;
+  playwright_slow_mo_ms: number;
   install_command: string;
   environment_note: string;
   recent_sessions: Array<Record<string, unknown>>;
@@ -845,9 +851,11 @@ export type AutofillStartRequest = AutofillRequest & {
 };
 
 export type AutofillStartResponse = {
+  success: boolean;
   job_id: number;
   packet_id: number | null;
   status: string;
+  browser_mode: string;
   opened_url: string;
   fields_detected: number;
   fields_filled: number;
@@ -857,6 +865,8 @@ export type AutofillStartResponse = {
   warnings: string[];
   manual_review_required: boolean;
   message: string;
+  suggested_fix?: string | null;
+  screenshot_path?: string | null;
   field_results: AutofillFieldResult[];
 };
 
@@ -1534,14 +1544,19 @@ export async function getAutofillStatus(): Promise<AutofillStatus> {
     status: "environment_warning",
     stage: "Stage 8 - Browser Autofill with Playwright",
     message:
-      "CareerAgent fills safe, high-confidence fields in a visible browser and always stops before final submit.",
+      "CareerAgent fills safe, high-confidence fields and always stops before final submit.",
     manual_review_required: true,
     playwright_installed: false,
     chromium_installed: false,
     headed_browser_supported: false,
+    headed_display_available: false,
+    configured_browser_mode: "headless",
+    playwright_headless: true,
+    playwright_use_xvfb: false,
+    playwright_slow_mo_ms: 0,
     install_command: "python -m playwright install chromium",
     environment_note:
-      "If headed Chromium does not appear in Docker on macOS, run the backend locally outside Docker for autofill testing.",
+      "Docker defaults to headless Playwright. Run the backend locally outside Docker for visible browser autofill.",
     recent_sessions: []
   });
 }

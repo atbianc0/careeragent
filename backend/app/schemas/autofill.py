@@ -40,9 +40,11 @@ class AutofillPreviewResponse(BaseModel):
 
 
 class AutofillStartResponse(BaseModel):
+    success: bool = True
     job_id: int
     packet_id: int | None = None
     status: str
+    browser_mode: str = "headed"
     opened_url: str
     fields_detected: int
     fields_filled: int
@@ -52,6 +54,8 @@ class AutofillStartResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     manual_review_required: bool = True
     message: str
+    suggested_fix: str | None = None
+    screenshot_path: str | None = None
     field_results: list[AutofillFieldResult] = Field(default_factory=list)
 
 
@@ -63,6 +67,11 @@ class AutofillStatusResponse(BaseModel):
     playwright_installed: bool
     chromium_installed: bool
     headed_browser_supported: bool
+    headed_display_available: bool
+    configured_browser_mode: str
+    playwright_headless: bool
+    playwright_use_xvfb: bool
+    playwright_slow_mo_ms: int
     install_command: str
     environment_note: str
     recent_sessions: list[dict[str, Any]] = Field(default_factory=list)

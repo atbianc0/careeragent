@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AutofillControls } from "@/components/AutofillControls";
 import {
@@ -22,7 +22,7 @@ export function AutofillManager({ status, safety, initialJobId = null }: Autofil
   const [error, setError] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<number | null>(initialJobId);
 
-  async function loadJobs() {
+  const loadJobs = useCallback(async () => {
     setLoading(true);
     try {
       const response = await getTrackerJobs();
@@ -43,11 +43,11 @@ export function AutofillManager({ status, safety, initialJobId = null }: Autofil
     } finally {
       setLoading(false);
     }
-  }
+  }, [initialJobId]);
 
   useEffect(() => {
     void loadJobs();
-  }, []);
+  }, [loadJobs]);
 
   const selectedJob = useMemo(
     () => jobs.find((job) => job.id === selectedJobId) ?? null,
@@ -60,6 +60,12 @@ export function AutofillManager({ status, safety, initialJobId = null }: Autofil
         <h2>Never Auto-Submit</h2>
         <p>{status.message}</p>
         <p>{status.environment_note}</p>
+        {status.configured_browser_mode === "headless" ? (
+          <p>
+            Headless mode does not show a live browser window. CareerAgent will still stop before final actions, and you
+            must open the application manually to review and submit.
+          </p>
+        ) : null}
       </section>
 
       <section className="panel-grid">
@@ -72,8 +78,16 @@ export function AutofillManager({ status, safety, initialJobId = null }: Autofil
             <dd>{status.playwright_installed ? "Yes" : "No"}</dd>
             <dt>Chromium Installed</dt>
             <dd>{status.chromium_installed ? "Yes" : "No"}</dd>
+            <dt>Browser Mode</dt>
+            <dd>{status.configured_browser_mode}</dd>
+            <dt>Headed Display Available</dt>
+            <dd>{status.headed_display_available ? "Yes" : "No"}</dd>
             <dt>Headed Browser Ready</dt>
             <dd>{status.headed_browser_supported ? "Yes" : "No"}</dd>
+            <dt>Xvfb Enabled</dt>
+            <dd>{status.playwright_use_xvfb ? "Yes" : "No"}</dd>
+            <dt>Slow Motion</dt>
+            <dd>{status.playwright_slow_mo_ms}ms</dd>
             <dt>Install Command</dt>
             <dd>{status.install_command}</dd>
           </dl>
@@ -99,8 +113,8 @@ export function AutofillManager({ status, safety, initialJobId = null }: Autofil
           <span className="status-tag">Stage 8</span>
         </div>
         <p className="subtle">
-          Preview the plan first, then start a visible Chromium session for the selected job. CareerAgent will fill safe
-          fields only and will never click any final submit or apply button.
+          Preview the plan first, then start Chromium for the selected job. CareerAgent will fill safe fields only and
+          will never click any final submit or apply button.
         </p>
 
         <div className="filter-row">

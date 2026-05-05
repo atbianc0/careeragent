@@ -59,7 +59,7 @@ Stage 11 adds cautious, explainable prediction estimates on top of the completed
 - Show per-job timeline history on the job detail page.
 - Update dashboard stats from tracker data.
 - Preview a rule-based autofill plan before opening the browser.
-- Launch a visible Chromium session with Playwright when the environment supports headed automation.
+- Launch Chromium with Playwright in headless Docker mode or headed local mode when a display is available.
 - Detect common application fields using explainable rule-based matching.
 - Fill only safe, high-confidence factual fields.
 - Upload generated packet files such as `tailored_resume.pdf` when available.
@@ -139,7 +139,7 @@ CareerAgent is being built toward a custom AI agent workflow, not just a set of 
 13. CareerAgent uses optional AI providers to improve parsing, tailoring, application drafts, and insights while keeping everything reviewable and safe.
 14. CareerAgent uses collected history to improve recommendations and make cautious predictions.
 
-At the end of this Stage 11 pass, setup, import, parsing, saved-job persistence, rule-based verification, rule-based scoring, packet generation, tracker logging, manual application status updates, follow-up tracking, autofill previews, safe headed browser autofill, market analytics dashboards, optional AI provider integration, and cautious prediction estimates are implemented. Final submission is still always manual.
+At the end of this Stage 11 pass, setup, import, parsing, saved-job persistence, rule-based verification, rule-based scoring, packet generation, tracker logging, manual application status updates, follow-up tracking, autofill previews, safe browser autofill, market analytics dashboards, optional AI provider integration, and cautious prediction estimates are implemented. Final submission is still always manual.
 
 ## Tech Stack
 
@@ -207,7 +207,7 @@ docker compose up --build
 
 If `data/profile.yaml` or `data/resume/base_resume.tex` do not exist yet, the app still starts and falls back to the committed example files.
 
-If LaTeX is not installed, the resume compile endpoint stays available and returns a clear message instead of crashing the backend.
+The backend Docker image includes LaTeX packages for PDF compilation. If LaTeX is unavailable in a custom or lighter image, the resume compile endpoint stays available and returns a clear message instead of crashing the backend.
 
 If Playwright Chromium is not installed yet, install it with:
 
@@ -215,7 +215,39 @@ If Playwright Chromium is not installed yet, install it with:
 python -m playwright install chromium
 ```
 
-If headed Chromium does not appear inside Docker on macOS, use the normal Docker stack for the rest of the app and run the backend locally outside Docker for autofill testing, or configure host display forwarding for Playwright. CareerAgent is honest about this limitation and still returns a clear environment warning from the autofill status endpoint.
+Docker defaults autofill to headless Playwright with `PLAYWRIGHT_HEADLESS=true`, because Docker on macOS usually has no X server/display for headed Chromium. CareerAgent still requires manual review and never submits applications.
+
+### LaTeX PDF Compilation
+
+The backend Docker image includes TeX packages for `xelatex` and `pdflatex`, including common resume packages such as `geometry`, `enumitem`, `hyperref`, `titlesec`, and `parskip`, plus recommended TeX fonts used by hyperlink/font packages. The first Docker build may take longer and the backend image will be larger because TeX Live is substantial.
+
+After rebuilding with `docker compose up --build`, `Compile PDF` on `/resume` should work inside Docker when the LaTeX source is valid. Generated PDFs are written under `outputs/resume/` or packet output folders, which are gitignored.
+
+If you want a lighter backend image, remove the TeX Live packages from `backend/Dockerfile` and use the generated `.tex` output only. CareerAgent keeps the graceful no-compiler fallback and returns a clear JSON message instead of crashing.
+
+### Troubleshooting
+
+Browser extension hydration warning: some extensions, especially Grammarly, inject attributes like `data-gr-ext-installed` into the page before React hydrates. CareerAgent sets `suppressHydrationWarning` on the `<body>` element to avoid this harmless warning. Hydration errors inside app components should still be treated as real bugs and fixed.
+
+### Playwright Autofill in Docker
+
+Docker on macOS usually cannot show headed Chromium because the container has no X server/display. CareerAgent defaults to headless Playwright in Docker:
+
+```bash
+PLAYWRIGHT_HEADLESS=true
+```
+
+Headless mode can attempt safe autofill and return a summary, but it cannot show you a live browser window. CareerAgent never clicks final submit, apply, confirm, finish, or send buttons. You must open the application manually, review every field, and submit yourself.
+
+For visible local autofill, run the backend outside Docker with a display:
+
+```bash
+PLAYWRIGHT_HEADLESS=false
+python -m playwright install chromium
+uvicorn main:app --reload
+```
+
+If headed mode fails with a “Missing X server” or similar display error, switch back to `PLAYWRIGHT_HEADLESS=true`, run the backend locally outside Docker, or configure a display/Xvfb. `PLAYWRIGHT_USE_XVFB=false` is the default; set it to `true` only when Xvfb is installed and you intentionally want a virtual display for headed Chromium.
 
 If you are upgrading from an older local database, CareerAgent adds the Stage 3 through Stage 11 job, packet, tracker, autofill, market, AI-supporting, and prediction fields automatically on startup. If you want a clean local reset instead, run:
 
@@ -358,6 +390,14 @@ CareerAgent should preserve the user’s original LaTeX resume structure, sectio
 7. Open the saved job detail page.
 8. Restart the app later and your saved jobs will still be in PostgreSQL.
 
+Workday and JavaScript-heavy job pages:
+
+- Some job boards, especially Workday, render job descriptions with JavaScript.
+- CareerAgent first tries normal requests and BeautifulSoup parsing.
+- If the text is not readable, CareerAgent may infer partial details from the URL, page title, meta tags, or embedded public JSON.
+- For best results, manually paste the full job description text.
+- CareerAgent does not bypass login walls, CAPTCHAs, anti-bot protections, or authentication.
+
 ### Verification workflow
 
 1. Open `/jobs`.
@@ -410,7 +450,7 @@ CareerAgent should preserve the user’s original LaTeX resume structure, sectio
 5. Click `Preview Autofill Plan`.
 6. Review the proposed values, uploadable files, and warnings.
 7. Click `Start Autofill in Browser`.
-8. Review the visible Chromium window manually.
+8. If Docker is in headless mode, review the returned summary and open the application manually in your browser. If running headed locally, review the visible Chromium window manually.
 9. Manually click submit only after reviewing the form yourself.
 10. Return to CareerAgent and manually mark the job applied from the tracker after you really submit it.
 
@@ -448,7 +488,7 @@ CareerAgent should preserve the user’s original LaTeX resume structure, sectio
 
 ### Stage 11 limitations
 
-- URL parsing is basic and may not work on JavaScript-heavy job pages.
+- URL parsing can infer partial details from some JavaScript-heavy job pages, but full descriptions may still require manual paste.
 - Verification is rule-based and approximate.
 - Scoring is also rule-based and approximate.
 - Stage 6 deterministic generation remains the fallback; Stage 10 AI drafts are optional and off by default.
@@ -472,7 +512,7 @@ CareerAgent should preserve the user’s original LaTeX resume structure, sectio
 - Autofill is rule-based and may miss fields or misclassify unusual layouts.
 - Some job sites require login or block automation before the real application form appears.
 - CareerAgent never bypasses CAPTCHAs, anti-bot protections, or login walls.
-- Headed browser display inside Docker may need extra setup on macOS; local backend execution may be the simplest autofill test path there.
+- Docker defaults autofill to headless mode because headed Chromium needs a display/XServer. Local backend execution is the simplest visible-browser path on macOS.
 - CareerAgent still stops before final submission every time.
 - AI-assisted parsing is Stage 10.
 - Some parsed, verified, and scored fields will be imperfect because CareerAgent currently uses deterministic rule-based parsing, verification, and scoring instead of AI or browser automation.
@@ -636,6 +676,7 @@ careeragent/
 - Import jobs from pasted descriptions.
 - Import jobs from pasted URLs.
 - Use rule-based parsing for title, company, location, skills, salary, seniority, remote status, responsibilities, requirements, and application questions.
+- Use safe partial parsing for Workday and other JavaScript-heavy URLs when only URL/title metadata is available.
 - View saved jobs in the Jobs page.
 - View detailed job records.
 - Prepare parsed job records for Stage 4 verification and Stage 5 scoring.
@@ -682,7 +723,7 @@ careeragent/
 ### Stage 8: Browser Autofill with Playwright
 
 - Status: Complete
-- Launch headed Chromium.
+- Launch Chromium in configurable headless or headed mode.
 - Detect common application fields.
 - Fill high-confidence factual fields.
 - Draft/fill common questions when safe.
