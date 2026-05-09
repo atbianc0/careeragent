@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
@@ -24,6 +24,7 @@ VALID_APPLICATION_STATUSES = {
     "withdrawn",
     "closed_before_apply",
 }
+NOTE_ALIAS = AliasChoices("notes", "note")
 
 
 class TrackerJobRead(JobRead):
@@ -32,7 +33,7 @@ class TrackerJobRead(JobRead):
 
 class StatusUpdateRequest(BaseModel):
     status: str
-    notes: str | None = Field(default=None, validation_alias=AliasChoices("notes", "note"))
+    notes: Annotated[str | None, Field(validation_alias=NOTE_ALIAS)] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -46,7 +47,7 @@ class StatusUpdateRequest(BaseModel):
 
 
 class NoteCreateRequest(BaseModel):
-    notes: str = Field(validation_alias=AliasChoices("notes", "note"))
+    notes: Annotated[str, Field(validation_alias=NOTE_ALIAS)]
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -61,13 +62,13 @@ class NoteCreateRequest(BaseModel):
 
 class FollowUpRequest(BaseModel):
     follow_up_at: datetime
-    notes: str | None = Field(default=None, validation_alias=AliasChoices("notes", "note"))
+    notes: Annotated[str | None, Field(validation_alias=NOTE_ALIAS)] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
 
 class CompleteFollowUpRequest(BaseModel):
-    notes: str | None = Field(default=None, validation_alias=AliasChoices("notes", "note"))
+    notes: Annotated[str | None, Field(validation_alias=NOTE_ALIAS)] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -95,9 +96,12 @@ class TrackerMutationResponse(BaseModel):
 
 
 class OpenApplicationResponse(BaseModel):
+    success: bool = True
+    job_id: int
     job: TrackerJobRead
     event: ApplicationEventRead
     url: str
+    message: str = "Application link opened and logged."
 
 
 class TrackerEventsQuery(BaseModel):

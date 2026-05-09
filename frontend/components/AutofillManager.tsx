@@ -5,9 +5,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AutofillControls } from "@/components/AutofillControls";
 import {
   type AutofillSafety,
+  type AutofillSession,
   type AutofillStatus,
   type Job,
+  closeAutofillSession,
+  getAutofillSessions,
   getTrackerJobs,
+  importJob,
+  updateJob,
 } from "@/lib/api";
 
 type AutofillManagerProps = {
@@ -16,10 +21,31 @@ type AutofillManagerProps = {
   initialJobId?: number | null;
 };
 
+const LOCAL_TEST_FORM_PATH = "/test-application-form";
+const LOCAL_TEST_JOB_COMPANY = "CareerAgent Test Company";
+const LOCAL_TEST_JOB_TITLE = "Test Application Form";
+
+function localTestFormUrl() {
+  if (typeof window === "undefined") {
+    return `http://localhost:3000${LOCAL_TEST_FORM_PATH}`;
+  }
+  return `${window.location.origin}${LOCAL_TEST_FORM_PATH}`;
+}
+
+function isLocalTestJob(job: Job) {
+  return job.source === "local_test" || job.url.endsWith(LOCAL_TEST_FORM_PATH);
+}
+
 export function AutofillManager({ status, safety, initialJobId = null }: AutofillManagerProps) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [sessionMessage, setSessionMessage] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [activeSessions, setActiveSessions] = useState<AutofillSession[]>(status.active_sessions || []);
+  const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
+  const [testJobBusy, setTestJobBusy] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState<number | null>(initialJobId);
 
   const loadJobs = useCallback(async () => {
@@ -49,72 +75,111 @@ export function AutofillManager({ status, safety, initialJobId = null }: Autofil
     void loadJobs();
   }, [loadJobs]);
 
+  const loadSessions = useCallback(async () => {
+    try {
+      const sessions = await getAutofillSessions();
+      setActiveSessions(sessions);
+      setSessionError(null);
+    } catch (loadError) {
+      setSessionError(loadError instanceof Error ? loadError.message : "Failed to load active autofill sessions.");
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSessions();
+  }, [loadSessions]);
+
   const selectedJob = useMemo(
     () => jobs.find((job) => job.id === selectedJobId) ?? null,
     [jobs, selectedJobId],
   );
+  const headlessMode = status.configured_browser_mode === "headless";
+
+  async function handleUseLocalTestForm() {
+    setTestJobBusy(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const allJobs = await getTrackerJobs();
+      const existingJob = allJobs.find(isLocalTestJob);
+      const url = localTestFormUrl();
+      let testJob = existingJob ?? null;
+
+      if (!testJob) {
+        testJob = await importJob({
+          input_type: "description",
+          content: [
+            `Company: ${LOCAL_TEST_JOB_COMPANY}`,
+            `Title: ${LOCAL_TEST_JOB_TITLE}`,
+            "Location: Localhost",
+            "Employment Type: Test",
+            "",
+            "Responsibilities:",
+            "- Provide a safe local HTML form for CareerAgent autofill testing.",
+            "",
+            "Requirements:",
+            "- This is not a real job.",
+          ].join("\n"),
+          source: "local_test",
+          use_ai: false,
+          provider: "mock",
+        });
+      }
+
+      if (testJob.url !== url || testJob.company !== LOCAL_TEST_JOB_COMPANY || testJob.title !== LOCAL_TEST_JOB_TITLE) {
+        testJob = await updateJob(testJob.id, {
+          company: LOCAL_TEST_JOB_COMPANY,
+          title: LOCAL_TEST_JOB_TITLE,
+          location: "Localhost",
+          url,
+          source: "local_test",
+          application_status: "saved",
+        });
+      }
+
+      await loadJobs();
+      setSelectedJobId(testJob.id);
+      setMessage("Local test form selected. Use Fill Application in visible mode, or run the advanced headless diagnostic.");
+    } catch (testJobError) {
+      setError(testJobError instanceof Error ? testJobError.message : "Failed to prepare the local test form job.");
+    } finally {
+      setTestJobBusy(false);
+    }
+  }
+
+  async function handleCloseSession(sessionId: string) {
+    setClosingSessionId(sessionId);
+    setSessionMessage(null);
+    setSessionError(null);
+    try {
+      await closeAutofillSession(sessionId);
+      setSessionMessage("Autofill browser session closed.");
+      await loadSessions();
+    } catch (closeError) {
+      setSessionError(closeError instanceof Error ? closeError.message : "Failed to close the autofill session.");
+    } finally {
+      setClosingSessionId(null);
+    }
+  }
+
+  async function handleAutofillUpdate() {
+    await Promise.all([loadJobs(), loadSessions()]);
+  }
 
   return (
     <>
-      <section className="warning-panel">
-        <h2>Never Auto-Submit</h2>
-        <p>{status.message}</p>
-        <p>{status.environment_note}</p>
-        {status.configured_browser_mode === "headless" ? (
-          <p>
-            Headless mode does not show a live browser window. CareerAgent will still stop before final actions, and you
-            must open the application manually to review and submit.
-          </p>
-        ) : null}
-      </section>
-
-      <section className="panel-grid">
-        <article className="panel">
-          <h2>Environment Status</h2>
-          <dl className="key-value compact-key-value">
-            <dt>Stage</dt>
-            <dd>{status.stage}</dd>
-            <dt>Playwright Installed</dt>
-            <dd>{status.playwright_installed ? "Yes" : "No"}</dd>
-            <dt>Chromium Installed</dt>
-            <dd>{status.chromium_installed ? "Yes" : "No"}</dd>
-            <dt>Browser Mode</dt>
-            <dd>{status.configured_browser_mode}</dd>
-            <dt>Headed Display Available</dt>
-            <dd>{status.headed_display_available ? "Yes" : "No"}</dd>
-            <dt>Headed Browser Ready</dt>
-            <dd>{status.headed_browser_supported ? "Yes" : "No"}</dd>
-            <dt>Xvfb Enabled</dt>
-            <dd>{status.playwright_use_xvfb ? "Yes" : "No"}</dd>
-            <dt>Slow Motion</dt>
-            <dd>{status.playwright_slow_mo_ms}ms</dd>
-            <dt>Install Command</dt>
-            <dd>{status.install_command}</dd>
-          </dl>
-        </article>
-
-        <article className="panel">
-          <h2>Safety Rules</h2>
-          {safety.safety_rules.length > 0 ? (
-            <ul className="list">
-              {safety.safety_rules.map((rule) => (
-                <li key={rule}>{rule}</li>
-              ))}
-            </ul>
-          ) : (
-            <p className="subtle">Safety policy is unavailable right now.</p>
-          )}
-        </article>
-      </section>
-
       <section className="panel">
         <div className="section-title">
-          <h2>Start Autofill</h2>
-          <span className="status-tag">Stage 8</span>
+          <h2>Job + Packet Selection</h2>
+          <span className="status-tag">{status.browser_mode}</span>
         </div>
         <p className="subtle">
-          Preview the plan first, then start Chromium for the selected job. CareerAgent will fill safe fields only and
-          will never click any final submit or apply button.
+          Open the application manually or let CareerAgent fill a visible browser session. CareerAgent never submits.
+        </p>
+        <p className="subtle">
+          Use Open in Browser for manual applications. Use Fill Application when visible browser autofill is available.
+          CareerAgent fills safe fields, stops before submit, and leaves the browser open for you.
         </p>
 
         <div className="filter-row">
@@ -134,13 +199,22 @@ export function AutofillManager({ status, safety, initialJobId = null }: Autofil
               ))}
             </select>
           </label>
-          <div className="button-row">
-            <button className="button secondary" type="button" onClick={() => void loadJobs()}>
-              Refresh Jobs
-            </button>
-          </div>
+          <button className="button secondary" type="button" onClick={() => void loadJobs()}>
+            Refresh Jobs
+          </button>
         </div>
 
+        <details className="details-block">
+          <summary>Test utilities</summary>
+          <p className="subtle">
+            The local test form is a fake application page for checking detection and final-submit blocking.
+          </p>
+          <button className="button secondary compact" type="button" onClick={() => void handleUseLocalTestForm()} disabled={testJobBusy || loading}>
+            {testJobBusy ? "Preparing Test Form..." : "Use Local Test Form"}
+          </button>
+        </details>
+
+        {message ? <p className="message success">{message}</p> : null}
         {error ? <p className="message error">{error}</p> : null}
         {loading ? <p className="subtle">Loading jobs with saved application URLs...</p> : null}
         {!loading && jobs.length === 0 ? (
@@ -149,8 +223,110 @@ export function AutofillManager({ status, safety, initialJobId = null }: Autofil
             before starting autofill.
           </p>
         ) : null}
-        {selectedJob ? <AutofillControls job={selectedJob} onAutofillComplete={loadJobs} /> : null}
+        {selectedJob ? (
+          <AutofillControls
+            key={selectedJob.id}
+            job={selectedJob}
+            configuredBrowserMode={status.configured_browser_mode}
+            visibleBrowserAvailable={status.visible_autofill_available}
+            onAutofillComplete={handleAutofillUpdate}
+          />
+        ) : null}
       </section>
+
+      <section className="panel">
+        <div className="section-title">
+          <h2>Active Autofill Sessions</h2>
+          <button className="button secondary compact" type="button" onClick={() => void loadSessions()}>
+            Refresh Sessions
+          </button>
+        </div>
+        {sessionMessage ? <p className="message success">{sessionMessage}</p> : null}
+        {sessionError ? <p className="message error">{sessionError}</p> : null}
+        {activeSessions.length === 0 ? (
+          <p className="subtle">No visible Chromium sessions are active.</p>
+        ) : (
+          <div className="timeline-list">
+            {activeSessions.map((session) => (
+              <div className="timeline-item" key={session.session_id}>
+                <strong>Job #{session.job_id}</strong>
+                <p className="subtle">{session.opened_url}</p>
+                <p className="subtle">
+                  Session {session.session_id} • {session.mode} • {session.created_at}
+                </p>
+                <button
+                  className="button secondary compact"
+                  type="button"
+                  onClick={() => void handleCloseSession(session.session_id)}
+                  disabled={closingSessionId !== null}
+                >
+                  {closingSessionId === session.session_id ? "Closing..." : "Close Session"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <details className="details-block">
+        <summary>Environment details</summary>
+        <section className="panel-grid">
+          <article className="panel">
+            <h2>Autofill Environment</h2>
+            <dl className="key-value compact-key-value">
+              <dt>Stage</dt>
+              <dd>{status.stage}</dd>
+              <dt>Browser Mode</dt>
+              <dd>{headlessMode ? "Headless Docker Mode" : "Visible Local Mode"}</dd>
+              <dt>Visible Autofill</dt>
+              <dd>{status.visible_autofill_available ? "Available" : "Unavailable"}</dd>
+              <dt>Can Continue</dt>
+              <dd>{status.can_continue_from_autofill ? "Yes" : "No"}</dd>
+              <dt>Recommended Action</dt>
+              <dd>{status.recommended_user_action === "fill_application" ? "Fill Application" : "Open in Browser"}</dd>
+              <dt>Playwright</dt>
+              <dd>{status.playwright_installed ? "Installed" : "Missing"}</dd>
+              <dt>Chromium</dt>
+              <dd>{status.chromium_installed ? "Installed" : "Missing"}</dd>
+              <dt>Headed Display</dt>
+              <dd>{status.headed_display_available ? "Available" : "Not available"}</dd>
+              <dt>Slow Motion</dt>
+              <dd>{status.playwright_slow_mo_ms}ms</dd>
+            </dl>
+            <p className="subtle">{status.message}</p>
+            {status.browser_mode === "headless" ? (
+              <p className="message warning">
+                CareerAgent is still connected to a headless backend. Stop the Docker backend and make sure the local
+                backend is running on localhost:8000 with PLAYWRIGHT_HEADLESS=false.
+              </p>
+            ) : null}
+            <p className="subtle">{status.environment_note}</p>
+            <dl className="key-value compact-key-value">
+              <dt>Backend Runtime</dt>
+              <dd>{status.backend_runtime}</dd>
+              <dt>Python</dt>
+              <dd>{status.python_executable}</dd>
+              <dt>Database Host</dt>
+              <dd>{status.database_host_hint}</dd>
+              <dt>Install Hint</dt>
+              <dd>{status.playwright_install_hint}</dd>
+            </dl>
+          </article>
+
+          <article className="panel">
+            <h2>Safety Rules</h2>
+            {safety.safety_rules.length > 0 ? (
+              <ul className="list">
+                {safety.safety_rules.map((rule) => (
+                  <li key={rule}>{rule}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="subtle">Safety policy is unavailable right now.</p>
+            )}
+          </article>
+        </section>
+      </details>
 
       {status.recent_sessions.length > 0 ? (
         <section className="panel">
@@ -164,7 +340,7 @@ export function AutofillManager({ status, safety, initialJobId = null }: Autofil
                 <p className="subtle">
                   Filled {String(session.fields_filled || 0)} of {String(session.fields_detected || 0)} detected fields.
                 </p>
-                {session.message ? <p className="subtle">{String(session.message)}</p> : null}
+                <p className="subtle">Manual review was required. CareerAgent did not submit the application.</p>
               </div>
             ))}
           </div>

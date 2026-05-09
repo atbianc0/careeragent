@@ -207,6 +207,295 @@ export type JobParseResult = {
   parsing_warnings: string[];
 };
 
+export type JobFinderSourceStatus = {
+  source_type: string;
+  label: string;
+  implemented: boolean;
+  configured: boolean;
+  manual_only: boolean;
+  notes: string;
+};
+
+export type JobFinderStatus = {
+  stage: string;
+  message: string;
+  sources: JobFinderSourceStatus[];
+  safety_rules: string[];
+};
+
+export type JobFinderQueryResponse = {
+  search_profile: Record<string, unknown>;
+  queries: string[];
+  default_queries: string[];
+  warnings: string[];
+};
+
+export type JobFinderRunRequest = {
+  source_types: string[];
+  queries: string[];
+  location: string;
+  source_urls: string[];
+  manual_links?: string[];
+  max_jobs: number;
+  use_ai_queries?: boolean;
+  auto_verify?: boolean;
+  auto_score?: boolean;
+  match_mode?: "strict" | "balanced" | "broad";
+  target_experience_levels?: string[];
+  excluded_experience_levels?: string[];
+  degree_filter?: DegreeFilter;
+};
+
+export type DegreeFilter = {
+  allow_no_degree: boolean;
+  allow_bachelors: boolean;
+  allow_masters_preferred: boolean;
+  allow_masters_required: boolean;
+  allow_phd_preferred: boolean;
+  allow_phd_required: boolean;
+  allow_unknown: boolean;
+};
+
+export type JobCandidate = {
+  id: number;
+  discovery_run_id: number;
+  source_type: string;
+  source_name: string | null;
+  company: string;
+  title: string;
+  location: string;
+  url: string;
+  description_snippet: string | null;
+  job_description: string | null;
+  role_category: string | null;
+  experience_level: string | null;
+  seniority_level: string | null;
+  level_confidence: number | null;
+  location_fit: string | null;
+  remote_status: string | null;
+  required_skills: string[];
+  preferred_skills: string[];
+  years_experience_min: number | null;
+  years_experience_max: number | null;
+  experience_requirement_text: string | null;
+  experience_requirement_strength: string | null;
+  salary_min: number | null;
+  salary_max: number | null;
+  salary_currency: string | null;
+  education_requirement: string | null;
+  degree_level: string | null;
+  degree_requirement_strength: string | null;
+  masters_required: boolean;
+  phd_required: boolean;
+  bachelors_required: boolean;
+  degree_requirement_text: string | null;
+  metadata_confidence: number | null;
+  missing_fields: string[];
+  posted_date: string | null;
+  discovered_at: string;
+  relevance_score: number;
+  filter_status: string;
+  filter_reasons: string[];
+  duplicate_key: string;
+  duplicate_of_job_id: number | null;
+  imported_job_id: number | null;
+  raw_data: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type JobDiscoveryRun = {
+  id: number;
+  source_type: string;
+  query: string;
+  location: string;
+  status: string;
+  started_at: string;
+  completed_at: string | null;
+  total_found: number;
+  total_candidates: number;
+  total_imported: number;
+  errors: string[];
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type JobDiscoveryRunDetail = JobDiscoveryRun & {
+  candidates: JobCandidate[];
+};
+
+export type JobFinderSourceResult = {
+  source_url: string;
+  source_type: string;
+  status: "success" | "warning" | "error" | string;
+  found: number;
+  jobs_fetched: number;
+  saved_candidates: number;
+  candidates_saved: number;
+  good_match: number;
+  weak_match: number;
+  excluded: number;
+  duplicate: number;
+  duplicates: number;
+  skipped_incomplete: number;
+  warnings: string[];
+  errors: string[];
+};
+
+export type JobFinderRunResponse = {
+  run: JobDiscoveryRun;
+  candidates: JobCandidate[];
+  summary: Record<string, number>;
+  source_results: JobFinderSourceResult[];
+  message: string;
+  errors: string[];
+};
+
+export type JobSource = {
+  id: number;
+  name: string;
+  source_type: string;
+  base_url: string;
+  normalized_url: string;
+  ats_type: string | null;
+  enabled: boolean;
+  status: string | null;
+  jobs_found: number | null;
+  last_error: string | null;
+  discovery_method: string | null;
+  warnings: string[];
+  imported_at: string | null;
+  last_checked_at: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type JobSourceSummary = {
+  total_sources: number;
+  enabled_sources: number;
+  valid_sources: number;
+  partial_sources: number;
+  by_ats_type: Record<string, number>;
+  last_imported_at: string | null;
+  last_discovery_run_at: string | null;
+};
+
+export type JobSourceImportResponse = {
+  success: boolean;
+  summary: {
+    total_read: number;
+    created: number;
+    updated: number;
+    skipped: number;
+    invalid: number;
+    deleted: number;
+    by_ats_type: Record<string, number>;
+  };
+};
+
+export type SavedSourceSearchRequest = {
+  ats_types?: string[];
+  source_ids?: number[];
+  use_enabled_sources?: boolean;
+  limit?: number;
+  offset?: number;
+  location?: string;
+  queries?: string[];
+  exclude_duplicates?: boolean;
+  exclude_imported?: boolean;
+  max_sources?: number;
+  match_mode?: "strict" | "balanced" | "broad";
+  target_experience_levels?: string[];
+  excluded_experience_levels?: string[];
+  degree_filter?: DegreeFilter;
+};
+
+export type SavedSourceSearchResult = {
+  source_id: number | null;
+  company: string | null;
+  ats_type: string;
+  base_url: string;
+  status: string;
+  jobs_fetched: number;
+  matches: number;
+  candidates_saved: number;
+  good_match: number;
+  weak_match: number;
+  excluded: number;
+  duplicate: number;
+  duplicates: number;
+  skipped_incomplete: number;
+  warnings: string[];
+  errors: string[];
+};
+
+export type RunCandidatePage = {
+  success: boolean;
+  run_id: number;
+  limit: number;
+  offset: number;
+  next_offset: number | null;
+  has_more: boolean;
+  total_matches: number;
+  candidates: JobCandidate[];
+};
+
+export type JobFinderSearchDiagnostics = {
+  match_mode?: string;
+  sources_checked?: number;
+  jobs_fetched?: number;
+  jobs_excluded?: number;
+  excluded_by_experience?: number;
+  excluded_by_degree?: number;
+  excluded_by_location?: number;
+  excluded_by_role?: number;
+  excluded_by_low_confidence?: number;
+  duplicates?: number;
+  incomplete?: number;
+  near_match_fallback_used?: boolean;
+  zero_result_diagnostics?: {
+    sample_excluded?: Array<{
+      company?: string | null;
+      title?: string | null;
+      location?: string | null;
+      role_category?: string | null;
+      experience_level?: string | null;
+      degree_level?: string | null;
+      primary_exclusion_category?: string | null;
+      relevance_score?: number | null;
+      reasons?: string[];
+    }>;
+  };
+  top_exclusion_reasons?: Array<{ reason: string; count: number }>;
+  top_incomplete_reasons?: Array<{ reason: string; count: number }>;
+  top_duplicate_reasons?: Array<{ reason: string; count: number }>;
+  source_order?: string[];
+  suggestions?: string[];
+};
+
+export type SavedSourceSearchResponse = RunCandidatePage & {
+  summary: Record<string, number>;
+  source_results: SavedSourceSearchResult[];
+  diagnostics: JobFinderSearchDiagnostics;
+};
+
+export type JobCandidateImportResponse = {
+  candidate: JobCandidate;
+  job: Job;
+  verified: boolean;
+  scored: boolean;
+  warnings: string[];
+};
+
+export type JobCandidateImportSelectedResponse = {
+  imported_count: number;
+  skipped_count: number;
+  jobs: Job[];
+  errors: string[];
+};
+
 export type AIStatus = {
   configured_provider: string;
   active_provider: string;
@@ -380,9 +669,12 @@ export type TrackerMutationResponse = {
 };
 
 export type OpenApplicationResponse = {
+  success: boolean;
+  job_id: number;
   job: Job;
   event: ApplicationEvent;
   url: string;
+  message: string;
 };
 
 export type ProfileData = {
@@ -802,6 +1094,12 @@ export type AutofillStatus = {
   stage: string;
   message: string;
   manual_review_required: boolean;
+  browser_mode: "headless" | "headed";
+  visible_autofill_available: boolean;
+  headless_diagnostic_available: boolean;
+  can_continue_from_autofill: boolean;
+  recommended_user_action: "open_in_browser" | "fill_application";
+  active_sessions: AutofillSession[];
   playwright_installed: boolean;
   chromium_installed: boolean;
   headed_browser_supported: boolean;
@@ -811,8 +1109,29 @@ export type AutofillStatus = {
   playwright_use_xvfb: boolean;
   playwright_slow_mo_ms: number;
   install_command: string;
+  playwright_install_hint: string;
+  python_executable: string;
+  backend_runtime: "local" | "docker" | "unknown";
+  database_host_hint: string;
   environment_note: string;
   recent_sessions: Array<Record<string, unknown>>;
+};
+
+export type AutofillSession = {
+  session_id: string;
+  job_id: number;
+  opened_url: string;
+  mode: string;
+  created_at: string;
+};
+
+export type AutofillSessionListResponse = {
+  sessions: AutofillSession[];
+};
+
+export type AutofillSessionCloseResponse = {
+  success: boolean;
+  session: Record<string, unknown>;
 };
 
 export type AutofillSafety = {
@@ -825,6 +1144,12 @@ export type AutofillRequest = {
   packet_id?: number | null;
   allow_base_resume_upload?: boolean;
   fill_sensitive_optional_fields?: boolean;
+};
+
+export type AutofillManualValue = {
+  key: string;
+  label: string;
+  value: string;
 };
 
 export type AutofillFieldResult = {
@@ -840,6 +1165,7 @@ export type AutofillPreviewResponse = {
   job_id: number;
   packet_id: number | null;
   proposed_values: Record<string, unknown>;
+  manual_values: AutofillManualValue[];
   files_available: string[];
   warnings: string[];
   manual_review_required: boolean;
@@ -848,13 +1174,21 @@ export type AutofillPreviewResponse = {
 
 export type AutofillStartRequest = AutofillRequest & {
   dry_run?: boolean;
+  mode?: "headless_test" | "visible_review";
+  keep_browser_open?: boolean;
+  keep_open_seconds?: number;
 };
 
 export type AutofillStartResponse = {
   success: boolean;
+  autofill_effective: boolean;
+  can_continue_in_browser: boolean;
   job_id: number;
   packet_id: number | null;
   status: string;
+  mode?: string | null;
+  session_mode: string;
+  session_id?: string | null;
   browser_mode: string;
   opened_url: string;
   fields_detected: number;
@@ -866,7 +1200,13 @@ export type AutofillStartResponse = {
   manual_review_required: boolean;
   message: string;
   suggested_fix?: string | null;
+  fix_command?: string | null;
+  details?: string | null;
+  no_fields_reason?: string | null;
+  recommended_next_action?: string | null;
   screenshot_path?: string | null;
+  screenshot_url?: string | null;
+  manual_values: AutofillManualValue[];
   field_results: AutofillFieldResult[];
 };
 
@@ -976,6 +1316,138 @@ export async function getJobs(filters?: JobFilters): Promise<Job[]> {
 
 export async function getJob(id: number | string): Promise<Job> {
   return requestJson<Job>(`/api/jobs/${id}`);
+}
+
+export async function getJobFinderStatus(): Promise<JobFinderStatus> {
+  return requestJson<JobFinderStatus>("/api/job-finder/status");
+}
+
+export async function generateJobFinderQueries(payload: { use_ai?: boolean; provider?: string }): Promise<JobFinderQueryResponse> {
+  return requestJson<JobFinderQueryResponse>("/api/job-finder/generate-queries", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function runJobFinder(payload: JobFinderRunRequest): Promise<JobFinderRunResponse> {
+  return requestJson<JobFinderRunResponse>("/api/job-finder/run", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function importJobSourceFile(payload: {
+  format: "csv" | "json";
+  path?: string;
+  skip_existing?: boolean;
+  replace_existing?: boolean;
+}): Promise<JobSourceImportResponse> {
+  return requestJson<JobSourceImportResponse>("/api/job-finder/sources/import-file", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function getJobSourceSummary(): Promise<JobSourceSummary> {
+  return requestJson<JobSourceSummary>("/api/job-finder/sources/summary");
+}
+
+export async function getJobSources(filters?: {
+  ats_type?: string;
+  enabled?: boolean;
+  status?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<JobSource[]> {
+  const params = new URLSearchParams();
+  if (filters?.ats_type) params.set("ats_type", filters.ats_type);
+  if (filters?.enabled !== undefined) params.set("enabled", String(filters.enabled));
+  if (filters?.status) params.set("status", filters.status);
+  if (filters?.search) params.set("search", filters.search);
+  if (filters?.limit !== undefined) params.set("limit", String(filters.limit));
+  if (filters?.offset !== undefined) params.set("offset", String(filters.offset));
+  const query = params.toString();
+  return requestJson<JobSource[]>(`/api/job-finder/sources${query ? `?${query}` : ""}`);
+}
+
+export async function updateJobSource(sourceId: number | string, payload: {
+  enabled?: boolean;
+  name?: string;
+  company?: string;
+  notes?: string;
+}): Promise<JobSource> {
+  return requestJson<JobSource>(`/api/job-finder/sources/${sourceId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function searchSavedJobSources(payload: SavedSourceSearchRequest): Promise<SavedSourceSearchResponse> {
+  return requestJson<SavedSourceSearchResponse>("/api/job-finder/sources/search-saved", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function getJobFinderRuns(): Promise<JobDiscoveryRun[]> {
+  return requestJson<JobDiscoveryRun[]>("/api/job-finder/runs");
+}
+
+export async function getJobFinderRun(runId: number | string): Promise<JobDiscoveryRunDetail> {
+  return requestJson<JobDiscoveryRunDetail>(`/api/job-finder/runs/${runId}`);
+}
+
+export async function getJobFinderRunCandidates(
+  runId: number | string,
+  filters?: { limit?: number; offset?: number }
+): Promise<RunCandidatePage> {
+  const params = new URLSearchParams();
+  if (filters?.limit !== undefined) params.set("limit", String(filters.limit));
+  if (filters?.offset !== undefined) params.set("offset", String(filters.offset));
+  const query = params.toString();
+  return requestJson<RunCandidatePage>(`/api/job-finder/runs/${runId}/candidates${query ? `?${query}` : ""}`);
+}
+
+export async function getJobCandidates(filters?: {
+  run_id?: number;
+  filter_status?: string;
+  source_type?: string;
+  search?: string;
+  min_relevance_score?: number;
+}): Promise<JobCandidate[]> {
+  const params = new URLSearchParams();
+  if (filters?.run_id) params.set("run_id", String(filters.run_id));
+  if (filters?.filter_status) params.set("filter_status", filters.filter_status);
+  if (filters?.source_type) params.set("source_type", filters.source_type);
+  if (filters?.search) params.set("search", filters.search);
+  if (filters?.min_relevance_score !== undefined) params.set("min_relevance_score", String(filters.min_relevance_score));
+  const query = params.toString();
+  return requestJson<JobCandidate[]>(`/api/job-finder/candidates${query ? `?${query}` : ""}`);
+}
+
+export async function importJobCandidate(
+  candidateId: number | string,
+  options?: { auto_verify?: boolean; auto_score?: boolean }
+): Promise<JobCandidateImportResponse> {
+  const params = new URLSearchParams();
+  if (options?.auto_verify) params.set("auto_verify", "true");
+  if (options?.auto_score) params.set("auto_score", "true");
+  const query = params.toString();
+  return requestJson<JobCandidateImportResponse>(`/api/job-finder/candidates/${candidateId}/import${query ? `?${query}` : ""}`, {
+    method: "POST"
+  });
+}
+
+export async function importSelectedJobCandidates(payload: {
+  candidate_ids: number[];
+  auto_verify?: boolean;
+  auto_score?: boolean;
+}): Promise<JobCandidateImportSelectedResponse> {
+  return requestJson<JobCandidateImportSelectedResponse>("/api/job-finder/candidates/import-selected", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
 }
 
 export async function getPackets(): Promise<ApplicationPacket[]> {
@@ -1539,6 +2011,14 @@ export function exportPredictionData(format: "json" | "csv" = "json"): string {
   return `${publicBaseUrl}/api/prediction/export?${params.toString()}`;
 }
 
+export function autofillScreenshotUrl(pathOrUrl: string): string {
+  if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
+    return pathOrUrl;
+  }
+  const publicBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+  return `${publicBaseUrl}${pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`}`;
+}
+
 export async function getAutofillStatus(): Promise<AutofillStatus> {
   return fetchJsonWithFallback<AutofillStatus>("/api/autofill/status", {
     status: "environment_warning",
@@ -1546,6 +2026,12 @@ export async function getAutofillStatus(): Promise<AutofillStatus> {
     message:
       "CareerAgent fills safe, high-confidence fields and always stops before final submit.",
     manual_review_required: true,
+    browser_mode: "headless",
+    visible_autofill_available: false,
+    headless_diagnostic_available: false,
+    can_continue_from_autofill: false,
+    recommended_user_action: "open_in_browser",
+    active_sessions: [],
     playwright_installed: false,
     chromium_installed: false,
     headed_browser_supported: false,
@@ -1555,6 +2041,10 @@ export async function getAutofillStatus(): Promise<AutofillStatus> {
     playwright_use_xvfb: false,
     playwright_slow_mo_ms: 0,
     install_command: "python -m playwright install chromium",
+    playwright_install_hint: "python -m playwright install chromium",
+    python_executable: "unknown",
+    backend_runtime: "unknown",
+    database_host_hint: "unknown",
     environment_note:
       "Docker defaults to headless Playwright. Run the backend locally outside Docker for visible browser autofill.",
     recent_sessions: []
@@ -1579,5 +2069,17 @@ export async function startAutofill(payload: AutofillStartRequest): Promise<Auto
   return requestJson<AutofillStartResponse>("/api/autofill/start", {
     method: "POST",
     body: JSON.stringify(payload)
+  });
+}
+
+export async function getAutofillSessions(): Promise<AutofillSession[]> {
+  const response = await requestJson<AutofillSessionListResponse>("/api/autofill/sessions");
+  return response.sessions;
+}
+
+export async function closeAutofillSession(sessionId: string): Promise<AutofillSessionCloseResponse> {
+  return requestJson<AutofillSessionCloseResponse>(`/api/autofill/sessions/${sessionId}/close`, {
+    method: "POST",
+    body: JSON.stringify({})
   });
 }

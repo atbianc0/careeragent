@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { JobTable } from "@/components/JobTable";
+import { JobTable, type JobTableRow } from "@/components/JobTable";
 import {
   type AIProviderInfo,
   type AIStatus,
@@ -15,15 +15,28 @@ import {
   type VerifyAllSummary,
   getAIProviders,
   getAIStatus,
+  getJob,
   getJobs,
   getRecommendations,
   importJob,
   parseJobImport,
   scoreAllJobs,
-  scoreJob,
   verifyAllJobs,
-  verifyJob,
 } from "@/lib/api";
+
+export type JobsManagerView = "saved" | "recommended" | "manual";
+
+const ACTIVE_FILTERS = [
+  { key: "active", label: "All active" },
+  { key: "recommended", label: "Recommended" },
+  { key: "needs_verification", label: "Needs verification" },
+  { key: "needs_scoring", label: "Needs scoring" },
+  { key: "packet_ready", label: "Packet ready" },
+  { key: "opened", label: "Opened" },
+  { key: "applied", label: "Applied" },
+  { key: "follow_up", label: "Follow-up" },
+  { key: "closed", label: "Closed/rejected" },
+];
 
 function formatSalaryRange(job: {
   salary_min: number | null;
@@ -93,6 +106,107 @@ function formatImportError(error: unknown, inputType: JobImportRequest["input_ty
   return `${baseMessage} Open the job in your browser, copy the full job description, and paste it into CareerAgent.`;
 }
 
+function normalizeKeyPart(value: string | null | undefined) {
+  return (value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function normalizedJobKey(job: Job) {
+  const url = normalizeKeyPart(job.url).replace(/\/+$/, "");
+  if (url) {
+    return `url:${url}`;
+  }
+  return `job:${normalizeKeyPart(job.company)}|${normalizeKeyPart(job.title)}|${normalizeKeyPart(job.location)}`;
+}
+
+function isTestJob(job: Job) {
+  const combined = `${job.source} ${job.application_status} ${job.company} ${job.title}`.toLowerCase();
+  return ["local_test", "stage10_smoke", "test", "demo", "careeragent test company", "test company", "fake local test form"].some((token) =>
+    combined.includes(token),
+  );
+}
+
+function isClosedJob(job: Job) {
+  return ["rejected", "withdrawn", "closed_before_apply", "closed"].includes(job.application_status) || job.verification_status === "closed";
+}
+
+function getNextAction(job: Job) {
+  if (isClosedJob(job)) {
+    return { label: "Review archive", href: `/jobs/${job.id}`, tone: "secondary" as const };
+  }
+  if (job.application_status === "applied_manual" || job.application_status === "follow_up" || job.interview_at) {
+    return { label: "Track outcome", href: `/jobs/${job.id}`, tone: "secondary" as const };
+  }
+  if (job.application_status === "application_opened") {
+    return { label: "Mark applied or follow up", href: `/jobs/${job.id}`, tone: "primary" as const };
+  }
+  if (job.application_status === "packet_ready") {
+    return { label: "Open/apply", href: `/jobs/${job.id}`, tone: "primary" as const };
+  }
+  if (job.verification_status === "unknown") {
+    return { label: "Verify job", href: `/jobs/${job.id}`, tone: "primary" as const };
+  }
+  if (job.scoring_status !== "scored") {
+    return { label: "Score fit", href: `/jobs/${job.id}`, tone: "primary" as const };
+  }
+  if (job.overall_priority_score >= 65) {
+    return { label: "Generate packet", href: `/jobs/${job.id}`, tone: "primary" as const };
+  }
+  return { label: "Open job", href: `/jobs/${job.id}`, tone: "secondary" as const };
+}
+
+function descriptionTextForJob(job: Job | null) {
+  const raw = job?.job_description?.trim() || "";
+  if (!raw) {
+    return "";
+  }
+
+  if (typeof window !== "undefined" && /<[^>]+>/.test(raw)) {
+    const document = new DOMParser().parseFromString(raw, "text/html");
+    return (document.body.textContent || "").trim();
+  }
+
+  return raw
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<[^>]+>/g, "")
+    .trim();
+}
+
+function descriptionParagraphs(job: Job | null) {
+  return descriptionTextForJob(job)
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.replace(/\n/g, " ").trim())
+    .filter(Boolean);
+}
+
+function jobMatchesFilter(job: Job, filter: string) {
+  if (filter === "recommended") {
+    return job.scoring_status === "scored" && job.overall_priority_score >= 65 && !isClosedJob(job);
+  }
+  if (filter === "needs_verification") {
+    return job.verification_status === "unknown" && !isClosedJob(job);
+  }
+  if (filter === "needs_scoring") {
+    return job.scoring_status !== "scored" && !isClosedJob(job);
+  }
+  if (filter === "packet_ready") {
+    return job.application_status === "packet_ready";
+  }
+  if (filter === "opened") {
+    return job.application_status === "application_opened";
+  }
+  if (filter === "applied") {
+    return ["applied_manual", "interview", "offer"].includes(job.application_status);
+  }
+  if (filter === "follow_up") {
+    return job.application_status === "follow_up" || Boolean(job.follow_up_at);
+  }
+  if (filter === "closed") {
+    return isClosedJob(job);
+  }
+  return !isClosedJob(job);
+}
+
 const defaultRequest: JobImportRequest = {
   input_type: "description",
   content: "",
@@ -101,7 +215,7 @@ const defaultRequest: JobImportRequest = {
   provider: "mock",
 };
 
-export function JobsManager() {
+export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [recommendations, setRecommendations] = useState<RecommendationResponse | null>(null);
   const [form, setForm] = useState<JobImportRequest>(defaultRequest);
@@ -110,8 +224,6 @@ export function JobsManager() {
   const [submitting, setSubmitting] = useState(false);
   const [verifyingAll, setVerifyingAll] = useState(false);
   const [scoringAll, setScoringAll] = useState(false);
-  const [verifyingJobId, setVerifyingJobId] = useState<number | null>(null);
-  const [scoringJobId, setScoringJobId] = useState<number | null>(null);
   const [verifySummary, setVerifySummary] = useState<VerifyAllSummary | null>(null);
   const [scoreSummary, setScoreSummary] = useState<ScoreAllSummary | null>(null);
   const [aiStatus, setAIStatus] = useState<AIStatus | null>(null);
@@ -119,6 +231,64 @@ export function JobsManager() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastSavedJobId, setLastSavedJobId] = useState<number | null>(null);
+  const [savedFilter, setSavedFilter] = useState("active");
+  const [search, setSearch] = useState("");
+  const [showTestJobs, setShowTestJobs] = useState(false);
+  const [showDuplicates, setShowDuplicates] = useState(false);
+  const [selectedDescriptionJob, setSelectedDescriptionJob] = useState<Job | null>(null);
+  const [descriptionModalOpen, setDescriptionModalOpen] = useState(false);
+  const [descriptionLoading, setDescriptionLoading] = useState(false);
+  const [descriptionError, setDescriptionError] = useState<string | null>(null);
+
+  const tableRows = useMemo<JobTableRow[]>(() => {
+    const firstSeen = new Map<string, number>();
+    const duplicateOf = new Map<number, number>();
+
+    for (const job of jobs) {
+      const key = normalizedJobKey(job);
+      const existing = firstSeen.get(key);
+      if (existing !== undefined) {
+        duplicateOf.set(job.id, existing);
+      } else {
+        firstSeen.set(key, job.id);
+      }
+    }
+
+    const searchTerm = search.trim().toLowerCase();
+    return jobs
+      .map((job) => {
+        const duplicateOfJobId = duplicateOf.get(job.id) ?? null;
+        const isDuplicate = duplicateOfJobId !== null;
+        return {
+          job,
+          nextAction: getNextAction(job),
+          isDuplicate,
+          duplicateOfJobId,
+          isTestJob: isTestJob(job),
+          activeDisplayStatus: job.application_status === "autofill_completed" ? "autofill test completed" : job.application_status,
+        };
+      })
+      .filter((row) => (showTestJobs ? true : !row.isTestJob))
+      .filter((row) => (showDuplicates ? true : !row.isDuplicate))
+      .filter((row) => jobMatchesFilter(row.job, savedFilter))
+      .filter((row) => {
+        if (!searchTerm) {
+          return true;
+        }
+        return [row.job.company, row.job.title, row.job.location].some((value) => value.toLowerCase().includes(searchTerm));
+      })
+      .sort((left, right) => {
+        if (left.job.overall_priority_score !== right.job.overall_priority_score) {
+          return right.job.overall_priority_score - left.job.overall_priority_score;
+        }
+        return right.job.id - left.job.id;
+      });
+  }, [jobs, savedFilter, search, showDuplicates, showTestJobs]);
+
+  const visibleRecommendations = useMemo(
+    () => (recommendations?.jobs || []).filter((job) => (showTestJobs ? true : !isTestJob(job))),
+    [recommendations, showTestJobs],
+  );
 
   async function loadJobs() {
     const response = await getJobs();
@@ -161,6 +331,38 @@ export function JobsManager() {
     void refreshData();
     void loadAIConfig();
   }, []);
+
+  useEffect(() => {
+    if (!descriptionModalOpen) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setDescriptionModalOpen(false);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [descriptionModalOpen]);
+
+  async function handleViewDescription(job: Job) {
+    setSelectedDescriptionJob(job);
+    setDescriptionModalOpen(true);
+    setDescriptionLoading(true);
+    setDescriptionError(null);
+
+    try {
+      const fullJob = await getJob(job.id);
+      setSelectedDescriptionJob(fullJob);
+      setJobs((currentJobs) => currentJobs.map((currentJob) => (currentJob.id === fullJob.id ? fullJob : currentJob)));
+    } catch (loadError) {
+      setDescriptionError(loadError instanceof Error ? loadError.message : "Failed to load the saved job description.");
+    } finally {
+      setDescriptionLoading(false);
+    }
+  }
 
   async function handlePreview() {
     setSubmitting(true);
@@ -224,32 +426,6 @@ export function JobsManager() {
     }
   }
 
-  async function handleVerifyJob(job: Job) {
-    if (!job.url.trim()) {
-      setError(`Job #${job.id} has no URL to verify.`);
-      return;
-    }
-
-    setVerifyingJobId(job.id);
-    setMessage(null);
-    setError(null);
-
-    try {
-      const response = await verifyJob(job.id);
-      setJobs((currentJobs) =>
-        currentJobs.map((currentJob) => (currentJob.id === response.job.id ? response.job : currentJob)),
-      );
-      await loadRecommendations();
-      setMessage(
-        `Verified job #${response.job.id}: ${response.verification.verification_status} (${response.verification.verification_score}/100).`,
-      );
-    } catch (verifyError) {
-      setError(verifyError instanceof Error ? verifyError.message : `Failed to verify job #${job.id}.`);
-    } finally {
-      setVerifyingJobId(null);
-    }
-  }
-
   async function handleScoreAll() {
     setScoringAll(true);
     setMessage(null);
@@ -267,47 +443,94 @@ export function JobsManager() {
     }
   }
 
-  async function handleScoreJob(job: Job) {
-    setScoringJobId(job.id);
-    setMessage(null);
-    setError(null);
-
-    try {
-      const response = await scoreJob(job.id);
-      setJobs((currentJobs) =>
-        currentJobs.map((currentJob) => (currentJob.id === response.job.id ? response.job : currentJob)),
-      );
-      await loadRecommendations();
-      setMessage(
-        `Scored job #${response.job.id}: resume match ${response.score.resume_match_score}/100, priority ${response.score.overall_priority_score}/100.`,
-      );
-    } catch (scoreError) {
-      setError(scoreError instanceof Error ? scoreError.message : `Failed to score job #${job.id}.`);
-    } finally {
-      setScoringJobId(null);
-    }
-  }
-
-  function handleTrackedJobUpdated(updatedJob: Job) {
-    setJobs((currentJobs) => currentJobs.map((job) => (job.id === updatedJob.id ? updatedJob : job)));
-  }
-
   return (
     <div className="page">
-      <section className="panel">
+      {descriptionModalOpen ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setDescriptionModalOpen(false);
+            }
+          }}
+        >
+          <section
+            className="description-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="description-modal-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="description-modal-header">
+              <div>
+                <p className="subtle">Saved job description</p>
+                <h2 id="description-modal-title">{selectedDescriptionJob?.title || "Saved Job"}</h2>
+                <p className="subtle">
+                  {selectedDescriptionJob?.company || "Unknown company"} • {selectedDescriptionJob?.location || "Unknown location"}
+                </p>
+                <p className="subtle">
+                  Source: {selectedDescriptionJob?.source || "Unknown"}
+                  {selectedDescriptionJob?.url ? ` • ${selectedDescriptionJob.url}` : ""}
+                </p>
+              </div>
+              <button className="button secondary compact" type="button" onClick={() => setDescriptionModalOpen(false)}>
+                Close
+              </button>
+            </div>
+
+            <div className="button-row description-modal-actions">
+              {selectedDescriptionJob ? (
+                <Link href={`/jobs/${selectedDescriptionJob.id}`} className="button secondary compact">
+                  Open Job Detail
+                </Link>
+              ) : null}
+              {selectedDescriptionJob?.url ? (
+                <a href={selectedDescriptionJob.url} target="_blank" rel="noreferrer" className="button secondary compact">
+                  Open Original Posting
+                </a>
+              ) : null}
+            </div>
+
+            {descriptionError ? <p className="message error">{descriptionError}</p> : null}
+
+            <div className="description-modal-body">
+              {descriptionLoading ? (
+                <p className="subtle">Loading description...</p>
+              ) : descriptionParagraphs(selectedDescriptionJob).length > 0 ? (
+                descriptionParagraphs(selectedDescriptionJob).map((paragraph, index) => (
+                  <p key={`${selectedDescriptionJob?.id || "job"}-${index}`}>{paragraph}</p>
+                ))
+              ) : (
+                <p className="subtle">
+                  No saved job description is available for this job. Open the job detail page or re-import the posting
+                  with a full description.
+                </p>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {view === "recommended" ? <section className="panel">
         <div className="section-title">
           <h2>Recommended Jobs</h2>
-          <span className="status-tag">Stage 11-ready</span>
+          <span className="subtle">Top 5 ranked saved jobs</span>
         </div>
         <p className="subtle">
-          Recommendations are rule-based and blend resume fit, availability, freshness, location fit, and application ease.
-          Predictions on the Predictions page add cautious outcome-informed estimates. Neither ranking is a guarantee.
+          CareerAgent ranks saved jobs by fit, availability, freshness, location, and application ease. These are guidance, not guarantees.
         </p>
+        <div className="button-row">
+          <label className="checkbox-row">
+            <input type="checkbox" checked={showTestJobs} onChange={(event) => setShowTestJobs(event.target.checked)} />
+            Show test/demo jobs
+          </label>
+        </div>
         {loading ? (
           <p className="subtle">Loading recommendations...</p>
-        ) : recommendations && recommendations.jobs.length > 0 ? (
+        ) : visibleRecommendations.length > 0 ? (
           <div className="recommendation-list">
-            {recommendations.jobs.map((job, index) => (
+            {visibleRecommendations.map((job, index) => (
               <article className="recommendation-card" key={job.id}>
                 <div className="recommendation-header">
                   <div>
@@ -334,7 +557,12 @@ export function JobsManager() {
                     <li key={reason}>{reason}</li>
                   ))}
                 </ul>
-                <p className="subtle">Freshness score: {job.freshness_score.toFixed(1)}</p>
+                <div className="button-row">
+                  <Link href={`/jobs/${job.id}`} className="button secondary compact">
+                    Open Job
+                  </Link>
+                  <span className="subtle">Next: {getNextAction(job).label}</span>
+                </div>
               </article>
             ))}
           </div>
@@ -343,16 +571,17 @@ export function JobsManager() {
             No recommendations yet. Verify and score jobs first, then CareerAgent will rank the strongest options here.
           </p>
         )}
-      </section>
+      </section> : null}
 
-      <section className="panel">
+      {view === "manual" ? <section className="panel">
         <div className="section-title">
-          <h2>Import Job</h2>
-          <span className="status-tag">Stage 11</span>
+          <h2>Manual Import Job</h2>
+          <Link href="/jobs?tab=discover" className="button secondary compact">
+            Use Job Finder
+          </Link>
         </div>
         <p className="subtle">
-          Paste a job description or URL, preview the parsing, save the job into PostgreSQL, then verify and score
-          it against the current profile and resume. AI parsing is optional and rule-based parsing stays available by default.
+          Paste a job description or URL when Job Finder does not cover the source. Most new jobs should start in Discover.
         </p>
         <ul className="list">
           <li>Rule-based parsing remains the default and only fills fields CareerAgent can honestly infer.</li>
@@ -460,9 +689,9 @@ export function JobsManager() {
           </p>
         ) : null}
         {error ? <p className="message error">{error}</p> : null}
-      </section>
+      </section> : null}
 
-      <section className="panel">
+      {view === "manual" ? <section className="panel">
         <div className="section-title">
           <h2>Parsed Preview</h2>
           <span className="subtle">
@@ -566,17 +795,49 @@ export function JobsManager() {
         ) : (
           <p className="subtle">Use Preview Parse to inspect the structured fields before you save the job.</p>
         )}
-      </section>
+      </section> : null}
 
-      <section className="panel">
+      {view === "saved" ? <section className="panel">
         <div className="section-title">
           <h2>Saved Jobs</h2>
-          <span className="subtle">{loading ? "Loading..." : `${jobs.length} jobs`}</span>
+          <span className="subtle">{loading ? "Loading..." : `${tableRows.length} shown of ${jobs.length}`}</span>
         </div>
         <p className="subtle">
-          Verify jobs first to estimate availability, score them against the profile and resume, then use Stage 7 tracking actions
-          to open application links, mark manual submissions, and schedule follow-ups.
+          This is the clean saved-jobs queue. Open a job detail page for verify, score, packet, apply, autofill, and tracker actions.
         </p>
+        <div className="job-filter-tabs" aria-label="Saved job filters">
+          {ACTIVE_FILTERS.map((filter) => (
+            <button
+              className={savedFilter === filter.key ? "filter-chip active" : "filter-chip"}
+              type="button"
+              key={filter.key}
+              onClick={() => setSavedFilter(filter.key)}
+            >
+              {filter.label}
+            </button>
+          ))}
+        </div>
+        <div className="filter-row">
+          <label className="field-group">
+            <span>Search saved jobs</span>
+            <input
+              className="input"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Company, title, or location"
+            />
+          </label>
+        </div>
+        <div className="button-row">
+          <label className="checkbox-row">
+            <input type="checkbox" checked={showTestJobs} onChange={(event) => setShowTestJobs(event.target.checked)} />
+            Show test/demo jobs
+          </label>
+          <label className="checkbox-row">
+            <input type="checkbox" checked={showDuplicates} onChange={(event) => setShowDuplicates(event.target.checked)} />
+            Show duplicates
+          </label>
+        </div>
         <div className="button-row">
           <button
             className="button secondary"
@@ -644,18 +905,9 @@ export function JobsManager() {
         {loading ? (
           <p className="subtle">Loading jobs...</p>
         ) : (
-          <JobTable
-            jobs={jobs}
-            onVerify={handleVerifyJob}
-            onScore={handleScoreJob}
-            onJobUpdated={handleTrackedJobUpdated}
-            onTrackerMessage={setMessage}
-            onTrackerError={setError}
-            verifyingJobId={verifyingJobId}
-            scoringJobId={scoringJobId}
-          />
+          <JobTable rows={tableRows} onViewDescription={handleViewDescription} />
         )}
-      </section>
+      </section> : null}
     </div>
   );
 }

@@ -109,6 +109,24 @@ APPLICATION_EVENT_COLUMN_DEFINITIONS = {
     "metadata_json": "JSON",
     "created_at": "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP",
 }
+JOB_SOURCE_COLUMN_DEFINITIONS = {
+    "normalized_url": "TEXT DEFAULT ''",
+    "status": "VARCHAR(50)",
+    "jobs_found": "INTEGER",
+    "last_error": "TEXT",
+    "discovery_method": "VARCHAR(100)",
+    "warnings": "JSON",
+    "imported_at": "TIMESTAMP WITH TIME ZONE",
+    "last_checked_at": "TIMESTAMP WITH TIME ZONE",
+}
+JOB_CANDIDATE_COLUMN_DEFINITIONS = {
+    "experience_level": "VARCHAR(50)",
+    "level_confidence": "FLOAT",
+    "location_fit": "VARCHAR(50)",
+    "education_requirement": "TEXT",
+    "metadata_confidence": "FLOAT",
+    "missing_fields": "JSON",
+}
 
 
 def get_db():
@@ -126,6 +144,8 @@ def init_db() -> None:
     _sync_job_columns()
     _sync_application_packet_columns()
     _sync_application_event_columns()
+    _sync_job_source_columns()
+    _sync_job_candidate_columns()
     backfill_job_defaults()
     backfill_application_packet_defaults()
     backfill_application_event_defaults()
@@ -175,7 +195,8 @@ def _sync_application_event_columns() -> None:
     if "application_events" not in inspector.get_table_names():
         return
 
-    existing_columns = {column["name"] for column in inspector.get_columns("application_events")}
+    column_details = {column["name"]: column for column in inspector.get_columns("application_events")}
+    existing_columns = set(column_details)
     missing_columns = {
         column_name: column_type
         for column_name, column_type in APPLICATION_EVENT_COLUMN_DEFINITIONS.items()
@@ -186,7 +207,7 @@ def _sync_application_event_columns() -> None:
         for column_name, column_type in missing_columns.items():
             connection.execute(text(f"ALTER TABLE application_events ADD COLUMN {column_name} {column_type}"))
 
-        if "packet_id" in missing_columns:
+        if "packet_id" in missing_columns and engine.dialect.name == "postgresql":
             connection.execute(
                 text(
                     "ALTER TABLE application_events "
@@ -194,7 +215,47 @@ def _sync_application_event_columns() -> None:
                     "FOREIGN KEY (packet_id) REFERENCES application_packets(id)"
                 )
             )
-        connection.execute(text("ALTER TABLE application_events ALTER COLUMN notes DROP NOT NULL"))
+        notes_column = column_details.get("notes")
+        if engine.dialect.name == "postgresql" and notes_column and notes_column.get("nullable") is False:
+            connection.execute(text("ALTER TABLE application_events ALTER COLUMN notes DROP NOT NULL"))
+
+
+def _sync_job_source_columns() -> None:
+    inspector = inspect(engine)
+    if "job_sources" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("job_sources")}
+    missing_columns = {
+        column_name: column_type
+        for column_name, column_type in JOB_SOURCE_COLUMN_DEFINITIONS.items()
+        if column_name not in existing_columns
+    }
+    if not missing_columns:
+        return
+
+    with engine.begin() as connection:
+        for column_name, column_type in missing_columns.items():
+            connection.execute(text(f"ALTER TABLE job_sources ADD COLUMN {column_name} {column_type}"))
+
+
+def _sync_job_candidate_columns() -> None:
+    inspector = inspect(engine)
+    if "job_candidates" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("job_candidates")}
+    missing_columns = {
+        column_name: column_type
+        for column_name, column_type in JOB_CANDIDATE_COLUMN_DEFINITIONS.items()
+        if column_name not in existing_columns
+    }
+    if not missing_columns:
+        return
+
+    with engine.begin() as connection:
+        for column_name, column_type in missing_columns.items():
+            connection.execute(text(f"ALTER TABLE job_candidates ADD COLUMN {column_name} {column_type}"))
 
 
 def backfill_job_defaults() -> None:

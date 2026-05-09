@@ -19,7 +19,7 @@ CareerAgent must never invent experience, skills, credentials, companies, dates,
 
 ## Current Stage
 
-**Stage 11 — Prediction and Improvements**
+**Stage 12 — Job Finder + Source Discovery**
 
 - Stage 1: Complete
 - Stage 2: Complete
@@ -32,10 +32,11 @@ CareerAgent must never invent experience, skills, credentials, companies, dates,
 - Stage 9: Complete
 - Stage 10: Complete
 - Stage 11: Complete
+- Stage 12: Initial implementation
 
-Stage 11 adds cautious, explainable prediction estimates on top of the completed parsing, packet, tracker, autofill, market, and AI-provider workflow. CareerAgent now uses stored local history to estimate priority, close risk, source quality, role quality, response likelihood, and apply windows while clearly labeling confidence and small-sample limits.
+Stage 12 adds a safe, source-based Job Finder that imports a saved ATS/company source database, discovers reviewable candidates from known boards and company career pages, deduplicates/filters them, and lets the user import selected candidates into the existing Jobs workflow.
 
-## Features Through Stage 11
+## Features Through Stage 12
 
 - Generate a private per-job packet folder under `outputs/application_packets/`.
 - Generate `tailored_resume.tex` by minimally editing the source LaTeX resume while preserving structure and style.
@@ -58,16 +59,16 @@ Stage 11 adds cautious, explainable prediction estimates on top of the completed
 - Show a real Tracker page with grouped statuses, summary cards, upcoming follow-ups, and recent activity.
 - Show per-job timeline history on the job detail page.
 - Update dashboard stats from tracker data.
-- Preview a rule-based autofill plan before opening the browser.
+- Open applications in the user's normal browser with tracker logging and no autofill.
 - Launch Chromium with Playwright in headless Docker mode or headed local mode when a display is available.
 - Detect common application fields using explainable rule-based matching.
 - Fill only safe, high-confidence factual fields.
 - Upload generated packet files such as `tailored_resume.pdf` when available.
 - Skip low-confidence, unknown, or sensitive fields unless the policy explicitly allows a conservative “Prefer not to answer” response.
 - Detect final submit/apply/confirm actions and never click them.
-- Log `autofill_started` and `autofill_completed` tracker events.
-- Update job status to `autofill_started` and `autofill_completed` without ever marking the job applied automatically.
-- Show autofill summaries and warnings in the frontend.
+- Log visible autofill start/completion events and headless diagnostic metadata separately.
+- Update job status to `autofill_started` and `autofill_completed` only for visible sessions the user can continue from.
+- Show two user-facing autofill actions plus collapsed headless diagnostics in the frontend.
 - Show pipeline summary cards for total, verified, scored, packet-ready, opened, applied, interview, rejected, and offer-stage jobs.
 - Break down jobs by role, company, location, source, verification status, and application status.
 - Surface top requested skills and top missing skills from stored parsing and scoring data.
@@ -94,8 +95,62 @@ Stage 11 adds cautious, explainable prediction estimates on top of the completed
 - Recalculate prediction scores for all jobs.
 - Show a Predictions dashboard with top priority jobs, close-risk jobs, response likelihood, source quality, role quality, apply windows, insights, and exports.
 - Export prediction-safe JSON or CSV without private profile, resume, notes, packet contents, generated files, API keys, or secrets.
+- Generate deterministic job-search queries from profile/resume/defaults, with optional AI-assisted query generation.
+- Import the generated job source database from `job-database-script/outputs/source_discovery/job_sources.csv` or `.json`.
+- Summarize saved source boards by ATS type and enabled/valid status.
+- Search saved Lever, Greenhouse, Ashby, Workday, or all enabled source boards without manually pasting URLs every run.
+- Discover jobs from Greenhouse, Lever, Ashby, conservative Workday URL fallback, company career pages, and generic remote-board/source URLs.
+- Accept LinkedIn and Indeed pasted links manually without scraping those sites automatically.
+- Store discovery runs and job candidates separately from saved jobs.
+- Deduplicate discovered candidates against existing candidates and saved jobs.
+- Filter candidates for Bay Area/new-grad/entry-level relevance and exclude obvious senior, staff, principal, manager, PhD-required, Master's-required, and 5+ year roles.
+- Review candidates in `/job-finder` and import only selected candidates into the main Jobs table.
+- Optionally verify and score imported candidates using the existing verifier/scoring flow.
 - Keep Stage 1 through Stage 5 features intact, including profile editing, resume editing, import, verification, scoring, and ranked recommendations.
 - Keep generated outputs private and gitignored.
+
+## Stage 12 Implemented
+
+- Query generation from profile, resume, and default test queries
+- Safe source-based discovery, not aggressive crawling
+- Greenhouse discovery
+- Lever discovery
+- Ashby discovery
+- Conservative Workday direct-link fallback
+- Company career page link discovery with a small link budget
+- Manual LinkedIn/Indeed pasted-link support
+- Candidate review table
+- Deduplication
+- Relevance filtering
+- Import selected candidates into main Jobs
+- Optional verify/score after import
+- Source database import from generated CSV/JSON
+- Saved source summary and source management
+- Saved-source search with first-5/next-5 paging from the same discovery run
+
+## Stage 12 Limitations
+
+- This is not an aggressive crawler.
+- CareerAgent searches saved company boards, not every company globally.
+- The source database can be expanded over time by rerunning the discovery script.
+- LinkedIn and Indeed are manual pasted links only.
+- Workday pages are often JavaScript-heavy and may return partial URL-inferred candidates.
+- Google/web search is a placeholder until a safe API provider is configured.
+- Some company pages block requests or require browser rendering.
+- Users should review candidates before importing.
+
+## Using the Job Source Database
+
+1. Run the source discovery script in `job-database-script`.
+2. It creates `job-database-script/outputs/source_discovery/job_sources.csv` and `job-database-script/outputs/source_discovery/job_sources.json`.
+3. Open CareerAgent -> Jobs -> Discover.
+4. Click Import Source CSV.
+5. Search Lever, Greenhouse, Ashby, Workday, or all enabled sources.
+6. Review the first 5 matches.
+7. Click Next 5 to page through candidates already saved for that discovery run.
+8. Import selected jobs into Saved Jobs.
+
+CareerAgent searches the saved company boards in the source database, not every company globally. The source database can be expanded over time. Workday support may be partial because many Workday boards are JavaScript-heavy. LinkedIn and Indeed remain manual-only sources. CareerAgent does not auto-apply and never clicks final submit/apply/confirm buttons.
 
 ## Stage 11 Implemented
 
@@ -229,25 +284,109 @@ If you want a lighter backend image, remove the TeX Live packages from `backend/
 
 Browser extension hydration warning: some extensions, especially Grammarly, inject attributes like `data-gr-ext-installed` into the page before React hydrates. CareerAgent sets `suppressHydrationWarning` on the `<body>` element to avoid this harmless warning. Hydration errors inside app components should still be treated as real bugs and fixed.
 
-### Playwright Autofill in Docker
+### Autofill
 
-Docker on macOS usually cannot show headed Chromium because the container has no X server/display. CareerAgent defaults to headless Playwright in Docker:
+There are two user-facing Autofill actions:
+
+1. `Open in Browser`
+   - Manual apply.
+   - Opens the job URL in your normal browser.
+   - Logs `application_link_opened`.
+   - No autofill runs.
+
+2. `Fill Application`
+   - Requires a visible Playwright browser.
+   - Run the backend locally with `PLAYWRIGHT_HEADLESS=false`.
+   - Fills safe fields and uploads available packet files.
+   - Opens a headed Chromium session and leaves it open for manual review.
+   - Returns a session id that can be closed from the Autofill page.
+   - The user manually submits.
+
+CareerAgent never clicks final submit, apply, confirm, finish, send, or equivalent completion actions.
+
+Docker on macOS usually cannot show headed Chromium because the container has no X server/display. Docker defaults to headless Playwright:
 
 ```bash
 PLAYWRIGHT_HEADLESS=true
 ```
 
-Headless mode can attempt safe autofill and return a summary, but it cannot show you a live browser window. CareerAgent never clicks final submit, apply, confirm, finish, or send buttons. You must open the application manually, review every field, and submit yourself.
+In Docker/headless mode, `Fill Application` returns `visible_browser_required` instead of running hidden autofill. Use `Open in Browser`, or run the backend locally with visible Playwright.
 
-For visible local autofill, run the backend outside Docker with a display:
+Headless Diagnostic:
+
+- For testing only.
+- Runs in a hidden browser to test field detection and safe filling.
+- Returns a summary, screenshot, and copyable values.
+- Cannot be continued.
+- Is not a real application flow.
+
+If CareerAgent opens a page but detects zero form fields, the result is `no_fields_detected` rather than `autofill_completed`. This often means the URL is a job-detail page, a JavaScript-heavy ATS page, a login/CAPTCHA page, or not the direct application form. Workday pages commonly behave this way; CareerAgent may detect an Apply button or link, but it does not click Workday Apply automatically.
+
+Use `/autofill` -> `Use Local Test Form` to create a fake local application form job at `http://localhost:3000/test-application-form`. This gives you a safe way to prove Playwright field detection, field filling, file warnings, and final-submit blocking without touching a real job application.
+
+### Visible Fill Application Setup
+
+For visible local autofill, keep PostgreSQL and the frontend in Docker, but run the backend outside Docker with a display.
+
+Terminal 1, from the project root:
 
 ```bash
-PLAYWRIGHT_HEADLESS=false
-python -m playwright install chromium
-uvicorn main:app --reload
+docker compose stop backend
+docker compose up -d db frontend
 ```
 
+Terminal 2, from the project root:
+
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python -m playwright install chromium
+DATABASE_URL="postgresql://careeragent:careeragent@localhost:5432/careeragent" PLAYWRIGHT_HEADLESS=false python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+The local backend must use `localhost` in `DATABASE_URL`; `db` is a Docker-only hostname. If you changed `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, or `POSTGRES_PORT` in Compose, update the local `DATABASE_URL` to match those values.
+
+Keep the frontend and database running, open `/autofill`, then click `Fill Application`. Docker on macOS usually cannot show headed Chromium; visible Playwright is best run locally outside Docker. In visible mode, CareerAgent starts a headed Chromium session, fills safe fields, returns `visible_session_started` with a `session_id`, and keeps the browser open until you close the session from the Autofill page or run session cleanup. `PLAYWRIGHT_KEEP_OPEN_SECONDS` (default `900`) is used by cleanup for stale visible sessions. `Open in Browser` remains the safest manual path.
+
+Verify the frontend is hitting the visible local backend:
+
+```bash
+curl http://localhost:8000/api/autofill/status
+```
+
+Expected fields include `browser_mode: headed`, `visible_autofill_available: true`, `chromium_installed: true`, `backend_runtime: local`, and `database_host_hint: localhost`.
+
 If headed mode fails with a “Missing X server” or similar display error, switch back to `PLAYWRIGHT_HEADLESS=true`, run the backend locally outside Docker, or configure a display/Xvfb. `PLAYWRIGHT_USE_XVFB=false` is the default; set it to `true` only when Xvfb is installed and you intentionally want a virtual display for headed Chromium.
+
+If Chromium is missing, install it inside the same virtualenv used to start the backend:
+
+```bash
+cd backend
+source .venv/bin/activate
+which python
+python -c "import sys; print(sys.executable)"
+python -m playwright install chromium
+DATABASE_URL="postgresql://careeragent:careeragent@localhost:5432/careeragent" PLAYWRIGHT_HEADLESS=false python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+`playwright_chromium_missing` only means the Playwright browser binaries are missing from the active backend virtualenv. It should not appear for navigation failures, closed browser sessions, HTTP failures, or Workday blocking.
+
+If `/api/autofill/status` still reports `browser_mode: headless`, Docker backend may still be serving port 8000. Check `docker compose ps`; the backend should be stopped, while `db` and `frontend` remain running. If switching jobs fails, refresh the page and confirm the selected job has a direct application URL.
+
+Workday/NVIDIA troubleshooting:
+
+- Workday pages may block Playwright, redirect unexpectedly, or fail with navigation errors such as `net::ERR_HTTP_RESPONSE_CODE_FAILURE`.
+- Use `Open in Browser` for Workday if visible autofill returns `workday_manual_required`.
+- If a saved Workday URL contains literal `...` or an ellipsis character, re-save or re-import the full job URL before using autofill.
+- CareerAgent will not bypass Workday protections, login walls, CAPTCHAs, or anti-bot restrictions.
+
+Switching jobs:
+
+- Closing one visible Chromium session is okay.
+- CareerAgent cleans closed sessions before listing sessions and before starting another visible autofill run.
+- A new `Fill Application` click starts a clean session for the currently selected job id.
 
 If you are upgrading from an older local database, CareerAgent adds the Stage 3 through Stage 11 job, packet, tracker, autofill, market, AI-supporting, and prediction fields automatically on startup. If you want a clean local reset instead, run:
 
@@ -255,6 +394,34 @@ If you are upgrading from an older local database, CareerAgent adds the Stage 3 
 docker compose down -v
 docker compose up --build
 ```
+
+### Local Non-Docker Development
+
+Docker Compose is the preferred local setup because it provides PostgreSQL, the backend, the frontend, Playwright dependencies, and the LaTeX packages together. If Docker is unavailable and you run the backend/frontend directly on the host, install backend dependencies in a virtual environment and point both server-side and browser-side frontend requests at the same backend URL:
+
+```bash
+cd backend
+DATABASE_URL=sqlite:////tmp/careeragent-dev.sqlite ENABLE_SAMPLE_JOBS=true python -m uvicorn main:app --reload
+
+cd ../frontend
+API_SERVER_URL=http://127.0.0.1:8000 NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000 npm run dev
+```
+
+Using `127.0.0.1` avoids local environments where `localhost` resolves differently for server-side fetches. Host-mode SQLite is useful for smoke tests, but PostgreSQL in Docker is the normal app database.
+
+### End-To-End Smoke Test
+
+After the stack is running, a practical trial run is:
+
+1. Open `/profile` and `/resume`; create private files from examples if needed, save, and refresh.
+2. Compile the resume PDF; if LaTeX is missing, verify the clear no-compiler message.
+3. Import a pasted job description, then test a Workday URL parse and confirm partial parsing warnings when full text is unavailable.
+4. Verify and score the imported job, then inspect recommendations.
+5. Generate an application packet and confirm the expected packet files are listed.
+6. Use `Open Application` or `Open in Browser` to log the application-link-opened event without autofill.
+7. Add a tracker note, set a follow-up, and manually mark the job applied only after you really submit outside CareerAgent.
+8. Open `/autofill`, confirm the two main actions are `Open in Browser` and `Fill Application`, and use headless diagnostics only from the advanced section.
+9. Open `/market`, `/ai`, and `/predictions`; confirm empty or small datasets are handled honestly, exports work, MockProvider works without an API key, and predictions are labeled as estimates.
 
 ## Stage 10 AI Provider Setup
 
@@ -447,12 +614,14 @@ Workday and JavaScript-heavy job pages:
 2. Import, verify, and score a job with a saved application URL.
 3. Generate an application packet for that job when you want uploadable materials ready.
 4. Open the job detail page, the packet detail page, or `/autofill`.
-5. Click `Preview Autofill Plan`.
-6. Review the proposed values, uploadable files, and warnings.
-7. Click `Start Autofill in Browser`.
-8. If Docker is in headless mode, review the returned summary and open the application manually in your browser. If running headed locally, review the visible Chromium window manually.
-9. Manually click submit only after reviewing the form yourself.
-10. Return to CareerAgent and manually mark the job applied from the tracker after you really submit it.
+5. Use `Open in Browser` when you want the safest manual path with tracker logging and no autofill.
+6. Use `Fill Application` only when a visible local Playwright browser is available.
+7. Use `Use Local Test Form` when you want a safe local form that should detect and fill fields.
+8. In Docker/headless mode, `Fill Application` returns `visible_browser_required` instead of running hidden autofill.
+9. Run `Advanced diagnostics` -> `Run Headless Field Detection Test` only as a diagnostic. You cannot continue from that hidden session.
+10. Treat `no_fields_detected` as an honest warning that CareerAgent opened the page but did not find an application form.
+11. Manually click submit only after reviewing the form yourself.
+12. Return to CareerAgent and manually mark the job applied from the tracker after you really submit it.
 
 ### Stage 9 market analytics workflow
 
@@ -485,6 +654,19 @@ Workday and JavaScript-heavy job pages:
 8. Review source quality, role quality, response likelihood, and apply-window estimates.
 9. Export JSON or CSV if you want a safe local prediction dataset.
 10. Use predictions as guidance, not guarantees.
+
+### Stage 12 job finder workflow
+
+1. Open `/job-finder`.
+2. Generate rule-based queries or use the default test queries.
+3. Select source types such as Greenhouse, Lever, Ashby, Workday, and company career pages.
+4. Paste company career URLs, ATS board URLs, or manual job links.
+5. Click `Find Jobs`.
+6. Review candidates, filter reasons, duplicate markers, and source warnings.
+7. Import one candidate or select multiple candidates and click `Import Selected`.
+8. Optionally verify/score imported jobs, then continue with packets, tracker, and manual application flow.
+
+Stage 12 safety: CareerAgent uses small, source-based fetches with timeouts and a normal user agent, respects `robots.txt` where practical for page fetches, does not use credentials, does not bypass CAPTCHAs/login walls, does not scrape LinkedIn/Indeed automatically, and never submits applications.
 
 ### Stage 11 limitations
 
@@ -723,14 +905,16 @@ careeragent/
 ### Stage 8: Browser Autofill with Playwright
 
 - Status: Complete
-- Launch Chromium in configurable headless or headed mode.
+- Launch headless Chromium only for diagnostics, and headed Chromium for user-continuable visible autofill.
+- Keep visible autofill browser sessions open through an in-memory session store.
+- List and close active visible sessions from the Autofill UI.
 - Detect common application fields.
 - Fill high-confidence factual fields.
 - Draft/fill common questions when safe.
 - Prefer not to answer demographic questions by default.
 - Never click submit/apply/final confirmation buttons.
-- Log autofill start and completion events into the tracker.
-- Show autofill previews and browser-session summaries in the UI.
+- Log visible autofill start and completion events into the tracker only when the user can continue in the visible browser.
+- Show headless field detection only as an advanced diagnostic.
 
 ### Stage 9: Market Analytics Dashboard
 
@@ -759,9 +943,24 @@ careeragent/
 - Estimate apply windows from collected import, applied, and response history.
 - Keep all recommendations descriptive, reviewable, grounded in stored data, and labeled with confidence.
 
-## Beyond Stage 11
+### Stage 12: Job Finder + Source Discovery
 
-Future stages can refine prediction feedback loops, follow-up planning, ATS coverage, local-model support, and reminder integrations while keeping CareerAgent human-in-the-loop and safe.
+- Status: Source database integration
+- Generate rule-based and optional AI-assisted search queries from profile/resume/defaults.
+- Import generated source CSV/JSON files from `job-database-script/outputs/source_discovery/`.
+- Show saved source counts by ATS type and enabled/valid status.
+- Search saved Lever, Greenhouse, Ashby, Workday, company career, or all enabled sources.
+- Page first 5 / next 5 candidates from a saved discovery run without refetching sources.
+- Discover candidates from Greenhouse, Lever, Ashby, conservative Workday URLs, company career pages, and remote/source URLs.
+- Treat LinkedIn and Indeed as pasted/manual links only.
+- Store reviewable candidates separately from saved jobs.
+- Deduplicate against candidates and saved jobs.
+- Filter out or deprioritize senior, staff, principal, manager, PhD-required, Master's-required, 5+ year, and non-Bay-Area roles.
+- Import selected candidates into the existing Jobs pipeline for verify, score, packet, tracker, and manual application work.
+
+## Beyond Stage 12
+
+Future stages can refine prediction feedback loops, follow-up planning, ATS coverage, local-model support, reminder integrations, richer company-source management, web-search provider integration, and browser-rendered source discovery while keeping CareerAgent human-in-the-loop and safe.
 
 ## Planned Improvements
 

@@ -34,12 +34,14 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-}
       PLAYWRIGHT_HEADLESS: ${PLAYWRIGHT_HEADLESS:-true}
+      PLAYWRIGHT_KEEP_OPEN_SECONDS: ${PLAYWRIGHT_KEEP_OPEN_SECONDS:-900}
       PLAYWRIGHT_USE_XVFB: ${PLAYWRIGHT_USE_XVFB:-false}
       PLAYWRIGHT_SLOW_MO_MS: ${PLAYWRIGHT_SLOW_MO_MS:-0}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
       - ./backend:/app
+      - ./job-database-script:/app/job-database-script
       - ./data:/app/data
       - ./outputs:/app/outputs
     depends_on:
@@ -54,14 +56,14 @@ services:
     environment:
       FRONTEND_PORT: ${FRONTEND_PORT:-3000}
       NEXT_PUBLIC_API_BASE_URL: http://localhost:${BACKEND_PORT:-8000}
-      API_SERVER_URL: http://backend:${BACKEND_PORT:-8000}
+      API_SERVER_URL: ${API_SERVER_URL:-http://host.docker.internal:${BACKEND_PORT:-8000}}
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     volumes:
       - ./frontend:/app
       - frontend_node_modules:/app/node_modules
-    depends_on:
-      - backend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: npm run dev -- --hostname 0.0.0.0 --port 3000
 
 volumes:

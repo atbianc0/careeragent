@@ -3,11 +3,13 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 import re
+from urllib.parse import urlparse, urlunparse
 from typing import Any, Iterator
 
 from sqlalchemy.orm import Session
@@ -21,23 +23,60 @@ from app.services.tracker import log_event, promote_job_status_if_needed
 
 from .field_detector import SENSITIVE_FIELD_KEYS, detect_form_fields
 from .safe_actions import BLOCKED_FINAL_SUBMIT_WORDS, should_block_element
-from .session_store import get_recent_session_summaries, save_session_summary
+from .session_store import (
+    cleanup_closed_sessions,
+    cleanup_expired_sessions,
+    create_session,
+    get_recent_session_summaries,
+    list_sessions,
+    save_session_summary,
+)
 
 HIGH_CONFIDENCE_THRESHOLD = 0.8
 SENSITIVE_OPTIONAL_FIELD_KEYS = {"race_ethnicity", "gender", "disability", "veteran_status"}
 SKIPPED_ALWAYS_FIELD_KEYS = {"ssn", "date_of_birth", "unknown_sensitive"}
-DEFAULT_REVIEW_MESSAGE = (
-    "Autofill completed. Please review everything manually. CareerAgent will not submit the application."
+DEFAULT_REVIEW_MESSAGE = "Browser opened and filled. Finish missing fields and submit manually."
+VISIBLE_SESSION_MESSAGE = (
+    "Visible browser is open. CareerAgent filled safe fields and stopped before submit. "
+    "Finish missing fields manually and submit yourself."
 )
 HEADLESS_REVIEW_MESSAGE = (
-    "Autofill attempted in headless mode. CareerAgent did not submit anything. Review the application manually in your browser before submitting."
+    "CareerAgent filled fields in a headless browser. Because this browser is not visible, you cannot continue from "
+    "this session. Use visible browser mode for real applications, or open the job in your default browser and manually apply."
 )
-HEADED_REVIEW_MESSAGE = "Review the browser manually. CareerAgent will not submit."
+HEADED_REVIEW_MESSAGE = (
+    "Visible browser autofill is running in a headed Chromium window. CareerAgent will stop before final actions so you can "
+    "continue reviewing manually."
+)
+VISIBLE_UNAVAILABLE_MESSAGE = (
+    "Fill Application requires a visible browser session so you can continue from the filled form. "
+    "The current Docker backend is running headless, so it cannot hand off a live browser. "
+    "Use Open in Browser, or run the backend locally with PLAYWRIGHT_HEADLESS=false."
+)
+VISIBLE_UNAVAILABLE_FIX = "Run the backend locally outside Docker with PLAYWRIGHT_HEADLESS=false and a display, then retry visible autofill."
+NO_FIELDS_MESSAGE = "CareerAgent opened the page, but no application form fields were detected."
+NO_FIELDS_REASON = (
+    "This may be a job detail page, a JavaScript-heavy page, a page requiring login, or not the actual application form."
+)
+NO_FIELDS_NEXT_ACTION = "Use Open in Browser or navigate to the actual application form manually."
 DISPLAY_UNAVAILABLE_MESSAGE = (
     "Headed Chromium cannot launch because the Docker container has no X server/display. "
     "Set PLAYWRIGHT_HEADLESS=true or run the backend locally with a display."
 )
 DISPLAY_UNAVAILABLE_FIX = "Use headless mode in Docker, or run backend locally outside Docker for visible browser autofill."
+WORKDAY_MANUAL_MESSAGE = (
+    "CareerAgent could not open this Workday page with Playwright. Workday often blocks or redirects automation and may "
+    "require manual browser navigation."
+)
+WORKDAY_MANUAL_NEXT_ACTION = "Use Open in Browser and complete this application manually, or paste a direct application form URL after you reach it."
+INVALID_TRUNCATED_URL_MESSAGE = "This job URL appears truncated. Open the original posting and save the full URL before using autofill."
+NAVIGATION_FAILED_MESSAGE = "CareerAgent could not open this page in Chromium."
+BROWSER_CLOSED_MESSAGE = "The browser was closed. Start a new Fill Application session if needed."
+PLAYWRIGHT_CHROMIUM_MISSING_MESSAGE = "Chromium is not installed for Playwright in the current backend environment."
+PLAYWRIGHT_CHROMIUM_INSTALL_COMMAND = "cd backend && source .venv/bin/activate && python -m playwright install chromium"
+PLAYWRIGHT_CHROMIUM_MISSING_DETAILS = (
+    "Make sure you run the command in the same virtualenv used to start uvicorn."
+)
 XSERVER_ERROR_MARKERS = (
     "without having a xserver running",
     "missing x server",
@@ -46,6 +85,28 @@ XSERVER_ERROR_MARKERS = (
     "no display",
     "cannot open display",
 )
+CHROMIUM_MISSING_ERROR_MARKERS = (
+    "executable doesn't exist",
+    "browser executable doesn't exist",
+    "please run the following command to download new browsers",
+    "browsertype.launch: executable",
+    "looks like playwright was just installed or updated",
+)
+NON_CHROMIUM_MISSING_ERROR_MARKERS = (
+    "page.goto",
+    "net::err_",
+    "target page",
+    "target closed",
+    "has been closed",
+    "context closed",
+    "browser closed",
+    "timeout",
+    "navigation",
+    "http_response_code_failure",
+    "missing x server",
+    "without having a xserver",
+)
+AUTOFILL_MODES = {"headless_test", "visible_review"}
 
 
 class AutofillError(ValueError):
@@ -71,6 +132,15 @@ def _relative_path(path: Path) -> str:
         return path.resolve().as_posix()
 
 
+def _screenshot_url(path_value: str | None) -> str | None:
+    if not path_value:
+        return None
+    filename = Path(path_value).name
+    if not filename:
+        return None
+    return f"/api/autofill/screenshots/{filename}"
+
+
 def _normalize_text(value: Any) -> str:
     if value is None:
         return ""
@@ -87,6 +157,42 @@ def _first_non_empty(*values: Any) -> str | None:
         if normalized:
             return normalized
     return None
+
+
+MANUAL_VALUE_LABELS = {
+    "full_name": "Full name",
+    "first_name": "First name",
+    "last_name": "Last name",
+    "email": "Email",
+    "phone": "Phone",
+    "linkedin": "LinkedIn",
+    "github": "GitHub",
+    "portfolio": "Portfolio",
+    "school": "School",
+    "degree": "Degree",
+    "graduation_date": "Graduation date",
+    "work_authorized_us": "Authorized to work in the United States",
+    "need_sponsorship_now": "Requires sponsorship now",
+    "need_sponsorship_future": "Requires sponsorship in the future",
+    "willing_to_relocate": "Willing to relocate",
+    "why_company": "Why are you interested in this company?",
+    "tell_us_about_yourself": "Tell us about yourself",
+    "salary_expectation": "Expected salary",
+}
+
+
+def _manual_values(values: dict[str, Any]) -> list[dict[str, str]]:
+    manual_values: list[dict[str, str]] = []
+    for key, label in MANUAL_VALUE_LABELS.items():
+        value = values.get(key)
+        if value in (None, "", []):
+            continue
+        if isinstance(value, bool):
+            display_value = "Yes" if value else "No"
+        else:
+            display_value = str(value)
+        manual_values.append({"key": key, "label": label, "value": display_value})
+    return manual_values
 
 
 def _job_or_raise(db: Session, job_id: int) -> Job:
@@ -276,10 +382,18 @@ def build_autofill_values(profile: dict[str, Any], packet: ApplicationPacket | N
         "email": personal.get("email"),
         "phone": personal.get("phone"),
         "address": _first_non_empty(personal.get("address"), personal.get("street_address")),
-        "city": personal.get("city"),
-        "state": _first_non_empty(personal.get("state"), personal.get("province"), personal.get("region")),
+        "city": _first_non_empty(personal.get("city"), str(personal.get("location") or "").split(",")[0]),
+        "state": _first_non_empty(
+            personal.get("state"),
+            personal.get("province"),
+            personal.get("region"),
+            str(personal.get("location") or "").split(",")[1] if "," in str(personal.get("location") or "") else None,
+        ),
         "zip": _first_non_empty(personal.get("zip"), personal.get("postal_code")),
-        "country": personal.get("country"),
+        "country": _first_non_empty(
+            personal.get("country"),
+            str(personal.get("location") or "").split(",")[2] if str(personal.get("location") or "").count(",") >= 2 else None,
+        ),
         "linkedin": links.get("linkedin"),
         "github": links.get("github"),
         "portfolio": _first_non_empty(links.get("portfolio"), links.get("website")),
@@ -305,7 +419,17 @@ def build_autofill_values(profile: dict[str, Any], packet: ApplicationPacket | N
     if question_policy.get("answer_relocation", True) and "willing_to_relocate" in application_defaults:
         values["willing_to_relocate"] = bool(application_defaults.get("willing_to_relocate"))
 
-    prompt_answers = _load_packet_question_answers(packet)
+    profile_only_answer_keys = {
+        "work_authorized_us",
+        "need_sponsorship_now",
+        "need_sponsorship_future",
+        "willing_to_relocate",
+    }
+    prompt_answers = {
+        key: value
+        for key, value in _load_packet_question_answers(packet).items()
+        if key not in profile_only_answer_keys
+    }
     values.update({key: value for key, value in prompt_answers.items() if _first_non_empty(value)})
 
     if not values.get("why_company"):
@@ -392,7 +516,7 @@ def _prepare_autofill_context(
         warnings.append("CareerAgent is using the safe example profile. Review every autofill value before using it on a real application.")
 
     if packet is None:
-        warnings.append("No application packet exists for this job yet. CareerAgent can still preview basic profile fields, but there may be no uploadable files.")
+        warnings.append("No application packet exists. Generate a packet first to upload tailored resume/cover letter.")
 
     files_available: list[str] = []
     if values.get("resume_upload"):
@@ -404,7 +528,7 @@ def _prepare_autofill_context(
             values["resume_upload"] = base_resume_upload
             files_available.append(base_resume_upload)
     else:
-        warnings.append("No tailored resume PDF is available to upload. Generate a packet with PDF compilation or explicitly allow a compiled base resume upload.")
+        warnings.append("No tailored_resume.pdf available. Compile PDF or use manual upload.")
 
     if values.get("cover_letter_upload"):
         files_available.append(str(values["cover_letter_upload"]))
@@ -447,6 +571,7 @@ def preview_autofill_plan(
         "job_id": context["job"].id,
         "packet_id": context["packet"].id if context["packet"] else None,
         "proposed_values": proposed_values,
+        "manual_values": _manual_values(values),
         "files_available": context["files_available"],
         "warnings": context["warnings"],
         "manual_review_required": True,
@@ -458,17 +583,50 @@ def _configured_browser_mode() -> str:
     return "headless" if settings.playwright_headless else "headed"
 
 
+def _running_in_docker() -> bool:
+    return Path("/.dockerenv").exists()
+
+
+def _backend_runtime() -> str:
+    if _running_in_docker():
+        return "docker"
+    if settings.backend_runtime in {"local", "docker"}:
+        return settings.backend_runtime
+    return "unknown"
+
+
 def _xvfb_available() -> bool:
     return shutil.which("Xvfb") is not None
 
 
 def _headed_display_available() -> bool:
+    if not _running_in_docker() and sys.platform in {"darwin", "win32"}:
+        return True
     return bool(os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY") or (settings.playwright_use_xvfb and _xvfb_available()))
 
 
 def _is_browser_display_error(exc: Exception) -> bool:
     message = str(exc).lower()
     return any(marker in message for marker in XSERVER_ERROR_MARKERS)
+
+
+def _is_chromium_missing_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    if any(marker in message for marker in NON_CHROMIUM_MISSING_ERROR_MARKERS):
+        return False
+    if any(marker in message for marker in CHROMIUM_MISSING_ERROR_MARKERS):
+        return True
+    return "playwright install" in message and any(token in message for token in ("chromium", "browser", "executable"))
+
+
+def _is_browser_closed_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in ("target page", "target closed", "has been closed", "context closed", "browser closed"))
+
+
+def _url_appears_truncated(url: str | None) -> bool:
+    normalized = _normalize_text(url)
+    return not normalized or "..." in normalized or "…" in normalized
 
 
 def _concise_playwright_error(exc: Exception) -> str:
@@ -480,12 +638,47 @@ def _concise_playwright_error(exc: Exception) -> str:
     return f"Playwright could not complete the autofill session: {first_line}"
 
 
+def _is_workday_url(url: str | None) -> bool:
+    normalized = _normalize_key_text(url)
+    return any(token in normalized for token in ("myworkdayjobs.com", "workdayjobs.com", "wd1.", "wd3.", "wd5."))
+
+
+def _browser_navigation_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.hostname not in {"localhost", "127.0.0.1"}:
+        return url
+    if not Path("/.dockerenv").exists():
+        return url
+    if parsed.port and parsed.port != settings.frontend_port:
+        return url
+    netloc = f"frontend:{settings.frontend_port}"
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
+def _screenshot_path(job_id: int, label: str) -> Path:
+    safe_label = re.sub(r"[^a-z0-9_-]+", "-", label.lower()).strip("-") or "page"
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return settings.outputs_dir / "autofill_screenshots" / f"job_{job_id}_{timestamp}_{safe_label}.png"
+
+
+def _capture_screenshot(page: Any, job_id: int, label: str, warnings: list[str]) -> str | None:
+    try:
+        path = _screenshot_path(job_id, label)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(path), full_page=True)
+        return _relative_path(path)
+    except Exception as exc:
+        warnings.append(f"Could not capture autofill screenshot: {_concise_playwright_error(exc)}")
+        return None
+
+
 @contextmanager
-def _xvfb_session_if_needed() -> Iterator[None]:
+def _xvfb_session_if_needed(headless: bool | None = None) -> Iterator[None]:
     process: subprocess.Popen[bytes] | None = None
     previous_display = os.getenv("DISPLAY")
+    launch_is_headless = settings.playwright_headless if headless is None else headless
 
-    if settings.playwright_headless or not settings.playwright_use_xvfb or previous_display:
+    if launch_is_headless or not settings.playwright_use_xvfb or previous_display:
         yield
         return
 
@@ -532,12 +725,18 @@ def _get_playwright_support_status() -> dict[str, Any]:
             "playwright_headless": settings.playwright_headless,
             "playwright_use_xvfb": settings.playwright_use_xvfb,
             "playwright_slow_mo_ms": settings.playwright_slow_mo_ms,
+            "python_executable": sys.executable,
+            "backend_runtime": _backend_runtime(),
+            "database_host_hint": settings.database_host_hint,
+            "playwright_install_hint": "python -m playwright install chromium",
         }
 
     chromium_installed = False
+    chromium_executable_path = ""
     try:
         with sync_playwright() as playwright:
-            executable_path = Path(playwright.chromium.executable_path)
+            chromium_executable_path = str(playwright.chromium.executable_path)
+            executable_path = Path(chromium_executable_path)
             chromium_installed = executable_path.exists()
     except Exception:
         chromium_installed = False
@@ -551,31 +750,277 @@ def _get_playwright_support_status() -> dict[str, Any]:
         "playwright_headless": settings.playwright_headless,
         "playwright_use_xvfb": settings.playwright_use_xvfb,
         "playwright_slow_mo_ms": settings.playwright_slow_mo_ms,
+        "python_executable": sys.executable,
+        "backend_runtime": _backend_runtime(),
+        "database_host_hint": settings.database_host_hint,
+        "playwright_install_hint": "python -m playwright install chromium",
+        "chromium_executable_path": chromium_executable_path,
     }
+
+
+def _resolve_session_mode(options: dict[str, Any]) -> str:
+    requested_mode = _normalize_text(options.get("mode"))
+    if not requested_mode:
+        return "visible_review"
+    if requested_mode not in AUTOFILL_MODES:
+        raise AutofillError("Autofill mode must be headless_test or visible_review.")
+    return requested_mode
+
+
+def _visible_review_available(support_status: dict[str, Any]) -> bool:
+    return bool(
+        not settings.playwright_headless
+        and support_status.get("playwright_installed")
+    )
+
+
+def _keep_open_seconds_for_visible_mode(options: dict[str, Any]) -> int:
+    if options.get("keep_browser_open") is False and options.get("keep_open_seconds") == 0:
+        return 0
+    raw_seconds = options.get("keep_open_seconds")
+    if raw_seconds is None:
+        return max(0, min(settings.playwright_keep_open_seconds, 1800))
+    try:
+        return max(0, min(int(raw_seconds), 1800))
+    except (TypeError, ValueError):
+        return max(0, min(settings.playwright_keep_open_seconds, 1800))
+
+
+def _chromium_missing_summary(
+    *,
+    job: Job,
+    packet: ApplicationPacket | None,
+    session_mode: str,
+    browser_mode: str,
+    warnings: list[str],
+    manual_values: list[dict[str, str]],
+    fields_detected: int = 0,
+    fields_filled: int = 0,
+    fields_skipped: int = 0,
+    files_uploaded: list[str] | None = None,
+    blocked_actions: list[str] | None = None,
+    field_results: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "success": False,
+        "autofill_effective": False,
+        "can_continue_in_browser": False,
+        "job_id": job.id,
+        "packet_id": packet.id if packet else None,
+        "status": "playwright_chromium_missing",
+        "mode": session_mode,
+        "session_mode": session_mode,
+        "session_id": None,
+        "browser_mode": browser_mode,
+        "opened_url": job.url,
+        "fields_detected": fields_detected,
+        "fields_filled": fields_filled,
+        "fields_skipped": fields_skipped,
+        "files_uploaded": files_uploaded or [],
+        "blocked_actions": blocked_actions or [],
+        "warnings": warnings,
+        "manual_review_required": True,
+        "message": PLAYWRIGHT_CHROMIUM_MISSING_MESSAGE,
+        "suggested_fix": PLAYWRIGHT_CHROMIUM_MISSING_DETAILS,
+        "fix_command": PLAYWRIGHT_CHROMIUM_INSTALL_COMMAND,
+        "details": PLAYWRIGHT_CHROMIUM_MISSING_DETAILS,
+        "recommended_next_action": "install_playwright_chromium_in_active_backend_venv",
+        "manual_values": manual_values,
+        "field_results": field_results or [],
+    }
+
+
+def _non_detection_failure_summary(
+    *,
+    job: Job,
+    packet: ApplicationPacket | None,
+    status: str,
+    message: str,
+    recommended_next_action: str,
+    warnings: list[str],
+    manual_values: list[dict[str, str]],
+    browser_mode: str = "headed",
+    details: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "success": False,
+        "autofill_effective": False,
+        "can_continue_in_browser": False,
+        "job_id": job.id,
+        "packet_id": packet.id if packet else None,
+        "status": status,
+        "mode": "visible_review",
+        "session_mode": "visible_review",
+        "session_id": None,
+        "browser_mode": browser_mode,
+        "opened_url": job.url,
+        "fields_detected": 0,
+        "fields_filled": 0,
+        "fields_skipped": 0,
+        "files_uploaded": [],
+        "blocked_actions": [],
+        "warnings": warnings,
+        "manual_review_required": True,
+        "message": message,
+        "details": details,
+        "recommended_next_action": recommended_next_action,
+        "manual_values": manual_values,
+        "field_results": [],
+    }
+
+
+def _invalid_truncated_url_summary(
+    *,
+    job: Job,
+    packet: ApplicationPacket | None,
+    warnings: list[str],
+    manual_values: list[dict[str, str]],
+    browser_mode: str = "headed",
+) -> dict[str, Any]:
+    warnings = [*warnings, "The saved URL contains literal ellipsis characters, so CareerAgent cannot know the full destination."]
+    return _non_detection_failure_summary(
+        job=job,
+        packet=packet,
+        status="invalid_or_truncated_url",
+        message=INVALID_TRUNCATED_URL_MESSAGE,
+        recommended_next_action="Open the original posting and re-save or re-import the full application URL.",
+        warnings=warnings,
+        manual_values=manual_values,
+        browser_mode=browser_mode,
+    )
+
+
+def _classify_navigation_failure_summary(
+    *,
+    job: Job,
+    packet: ApplicationPacket | None,
+    warnings: list[str],
+    manual_values: list[dict[str, str]],
+    error_text: str,
+    response_status: int | None = None,
+) -> dict[str, Any]:
+    concise_detail = error_text.strip().splitlines()[0][:260] if error_text.strip() else None
+    if _is_workday_url(job.url):
+        warnings = [
+            *warnings,
+            "Workday pages are often JavaScript-heavy or protected.",
+            "CareerAgent did not submit anything.",
+        ]
+        if response_status is not None:
+            warnings.append(f"Workday returned HTTP {response_status}.")
+        return _non_detection_failure_summary(
+            job=job,
+            packet=packet,
+            status="workday_manual_required",
+            message=WORKDAY_MANUAL_MESSAGE,
+            recommended_next_action=WORKDAY_MANUAL_NEXT_ACTION,
+            warnings=warnings,
+            manual_values=manual_values,
+            details=concise_detail,
+        )
+
+    status = "page_blocked_or_unavailable" if response_status and response_status >= 400 else "navigation_failed"
+    warnings = [*warnings, "CareerAgent did not submit anything."]
+    if response_status is not None:
+        warnings.append(f"The page returned HTTP {response_status}.")
+    return _non_detection_failure_summary(
+        job=job,
+        packet=packet,
+        status=status,
+        message=NAVIGATION_FAILED_MESSAGE,
+        recommended_next_action="Use Open in Browser and complete this application manually, or save a direct application form URL.",
+        warnings=warnings,
+        manual_values=manual_values,
+        details=concise_detail,
+    )
+
+
+def _browser_closed_summary(
+    *,
+    job: Job,
+    packet: ApplicationPacket | None,
+    warnings: list[str],
+    manual_values: list[dict[str, str]],
+    fields_detected: int = 0,
+    fields_filled: int = 0,
+    fields_skipped: int = 0,
+    files_uploaded: list[str] | None = None,
+    blocked_actions: list[str] | None = None,
+    field_results: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "success": False,
+        "autofill_effective": False,
+        "can_continue_in_browser": False,
+        "job_id": job.id,
+        "packet_id": packet.id if packet else None,
+        "status": "browser_closed",
+        "mode": "visible_review",
+        "session_mode": "visible_review",
+        "session_id": None,
+        "browser_mode": "headed",
+        "opened_url": job.url,
+        "fields_detected": fields_detected,
+        "fields_filled": fields_filled,
+        "fields_skipped": fields_skipped,
+        "files_uploaded": files_uploaded or [],
+        "blocked_actions": blocked_actions or [],
+        "warnings": warnings,
+        "manual_review_required": True,
+        "message": BROWSER_CLOSED_MESSAGE,
+        "recommended_next_action": "Start a new Fill Application session if you still want visible autofill.",
+        "manual_values": manual_values,
+        "field_results": field_results or [],
+    }
+
+
+def _status_recent_session_summaries() -> list[dict[str, Any]]:
+    redacted_keys = {"manual_values", "field_results", "proposed_values"}
+    summaries: list[dict[str, Any]] = []
+    for summary in get_recent_session_summaries():
+        summaries.append({key: value for key, value in summary.items() if key not in redacted_keys})
+    return summaries
+
+
+def _hold_visible_browser_for_review(page: Any, keep_open_seconds: int, warnings: list[str]) -> None:
+    if keep_open_seconds <= 0:
+        return
+    warnings.append(
+        f"Visible browser review mode kept Chromium open for up to {keep_open_seconds} seconds so the user could continue manually."
+    )
+    try:
+        page.wait_for_timeout(keep_open_seconds * 1000)
+    except Exception:
+        warnings.append("The visible browser closed before the review hold completed.")
 
 
 def get_autofill_status() -> dict[str, Any]:
     support_status = _get_playwright_support_status()
-    if not support_status["playwright_installed"] or not support_status["chromium_installed"]:
+    browser_mode = _configured_browser_mode()
+    visible_autofill_available = _visible_review_available(support_status)
+    headless_diagnostic_available = bool(support_status["playwright_installed"] and support_status["chromium_installed"])
+    can_continue_from_autofill = visible_autofill_available
+    recommended_user_action = "fill_application" if visible_autofill_available else "open_in_browser"
+
+    if not support_status["playwright_installed"]:
         status = "environment_warning"
-    elif settings.playwright_headless or support_status["headed_browser_supported"]:
+    elif browser_mode == "headless" or visible_autofill_available:
         status = "ready"
     else:
         status = "environment_warning"
 
-    browser_mode = _configured_browser_mode()
     if browser_mode == "headless":
         message = (
-            "CareerAgent is configured for headless Chromium. It can fill safe high-confidence fields, "
-            "but you must open the application manually, review everything, and submit yourself."
+            "CareerAgent is configured for headless diagnostics. Fill Application requires a visible local browser, "
+            "so use Open in Browser or run the backend locally with PLAYWRIGHT_HEADLESS=false."
         )
         environment_note = (
             "Docker on macOS usually has no X server/display, so Docker defaults to PLAYWRIGHT_HEADLESS=true. "
-            "Run the backend locally with PLAYWRIGHT_HEADLESS=false for visible browser review."
+            "Run the backend locally with PLAYWRIGHT_HEADLESS=false for Fill Application."
         )
     else:
         message = (
-            "CareerAgent is configured for headed Chromium. It fills safe high-confidence fields and always stops before final submit."
+            "CareerAgent is configured for visible browser autofill. It fills safe high-confidence fields and always stops before final submit."
         )
         environment_note = (
             "Headed Chromium requires a display/XServer. If it fails in Docker, set PLAYWRIGHT_HEADLESS=true or run the backend locally outside Docker."
@@ -586,9 +1031,16 @@ def get_autofill_status() -> dict[str, Any]:
         "stage": "Stage 8 - Browser Autofill with Playwright",
         "message": message,
         "manual_review_required": True,
+        "browser_mode": browser_mode,
+        "visible_autofill_available": visible_autofill_available,
+        "headless_diagnostic_available": headless_diagnostic_available,
+        "can_continue_from_autofill": can_continue_from_autofill,
+        "recommended_user_action": recommended_user_action,
+        "active_sessions": list_sessions(),
         "install_command": "python -m playwright install chromium",
+        "playwright_install_hint": "python -m playwright install chromium",
         "environment_note": environment_note,
-        "recent_sessions": get_recent_session_summaries(),
+        "recent_sessions": _status_recent_session_summaries(),
         **support_status,
     }
 
@@ -633,11 +1085,33 @@ def _detect_page_warnings(page: Any) -> list[str]:
     return warnings
 
 
+def _detect_apply_actions(page: Any) -> list[str]:
+    try:
+        raw_actions = page.evaluate(
+            """
+            () => Array.from(document.querySelectorAll("button, input[type=submit], input[type=button], a, [role='button'], [role='link']")).map((element) => ({
+              text: (element.innerText || element.textContent || element.getAttribute("value") || element.getAttribute("aria-label") || element.getAttribute("title") || "").trim(),
+              href: element.getAttribute("href") || "",
+            }))
+            """
+        )
+    except Exception:
+        return []
+
+    apply_actions: list[str] = []
+    for action in raw_actions:
+        label = _normalize_text(action.get("text")) or _normalize_text(action.get("href")) or "apply action"
+        normalized = _normalize_key_text(label)
+        if normalized in {"apply", "apply now"} or "apply now" in normalized or normalized.startswith("apply "):
+            apply_actions.append(f"{label} action detected and not clicked.")
+    return list(dict.fromkeys(apply_actions))
+
+
 def _detect_blocked_actions(page: Any) -> list[str]:
     raw_actions = page.evaluate(
         """
-        () => Array.from(document.querySelectorAll("button, input[type=submit], input[type=button], [role='button']")).map((element) => ({
-          text: (element.innerText || element.textContent || element.getAttribute("value") || element.getAttribute("aria-label") || "").trim(),
+        () => Array.from(document.querySelectorAll("button, input[type=submit], input[type=button], a, [role='button'], [role='link']")).map((element) => ({
+          text: (element.innerText || element.textContent || element.getAttribute("value") || element.getAttribute("aria-label") || element.getAttribute("title") || "").trim(),
           type: (element.getAttribute("type") || element.tagName || "").toLowerCase(),
         }))
         """
@@ -722,6 +1196,504 @@ def _apply_value_to_field(page: Any, field: dict[str, Any], desired_value: Any) 
     return True, "Filled text field."
 
 
+def _fill_safe_fields(
+    *,
+    page: Any,
+    fields_detected: list[dict[str, Any]],
+    values: dict[str, Any],
+    warnings: list[str],
+    allow_sensitive_optional: bool,
+    headless: bool,
+    playwright_error_type: Any,
+) -> tuple[list[dict[str, Any]], int, int, list[str]]:
+    field_results: list[dict[str, Any]] = []
+    fields_filled = 0
+    fields_attempted = 0
+    files_uploaded: list[str] = []
+
+    if headless and allow_sensitive_optional:
+        warnings.append("Headless mode skips sensitive optional fields even when optional EEO autofill is requested.")
+        allow_sensitive_optional = False
+
+    for field in fields_detected:
+        field_key = str(field.get("field_key") or "unknown_question")
+        label = _first_non_empty(field.get("label_text"), field.get("placeholder"), field.get("name"), field.get("id"), field_key)
+        confidence = float(field.get("confidence") or 0.0)
+        value = values.get(field_key)
+        safe_to_fill = bool(field.get("safe_to_fill"))
+
+        if field_key in SKIPPED_ALWAYS_FIELD_KEYS:
+            field_results.append(
+                {
+                    "field_key": field_key,
+                    "label": label,
+                    "selector": field.get("selector"),
+                    "filled": False,
+                    "confidence": confidence,
+                    "reason": "Sensitive field skipped by policy.",
+                }
+            )
+            continue
+
+        if field_key in SENSITIVE_OPTIONAL_FIELD_KEYS and not allow_sensitive_optional:
+            field_results.append(
+                {
+                    "field_key": field_key,
+                    "label": label,
+                    "selector": field.get("selector"),
+                    "filled": False,
+                    "confidence": confidence,
+                    "reason": "Sensitive optional field skipped unless explicitly enabled.",
+                }
+            )
+            continue
+
+        if field_key in SENSITIVE_OPTIONAL_FIELD_KEYS and allow_sensitive_optional:
+            safe_to_fill = True
+
+        if not safe_to_fill:
+            field_results.append(
+                {
+                    "field_key": field_key,
+                    "label": label,
+                    "selector": field.get("selector"),
+                    "filled": False,
+                    "confidence": confidence,
+                    "reason": str(field.get("reason") or "Field not considered safe to autofill."),
+                }
+            )
+            continue
+
+        if confidence < HIGH_CONFIDENCE_THRESHOLD:
+            field_results.append(
+                {
+                    "field_key": field_key,
+                    "label": label,
+                    "selector": field.get("selector"),
+                    "filled": False,
+                    "confidence": confidence,
+                    "reason": "Confidence below the Stage 8 autofill threshold.",
+                }
+            )
+            continue
+
+        if value in (None, "", []):
+            field_results.append(
+                {
+                    "field_key": field_key,
+                    "label": label,
+                    "selector": field.get("selector"),
+                    "filled": False,
+                    "confidence": confidence,
+                    "reason": "No truthful value was available for this field.",
+                }
+            )
+            continue
+
+        try:
+            fields_attempted += 1
+            filled, reason = _apply_value_to_field(page, field, value)
+        except playwright_error_type as exc:
+            filled = False
+            reason = f"Browser interaction failed: {exc}"
+
+        if filled:
+            fields_filled += 1
+            if field_key in {"resume_upload", "cover_letter_upload"}:
+                files_uploaded.append(Path(str(value)).name)
+
+        field_results.append(
+            {
+                "field_key": field_key,
+                "label": label,
+                "selector": field.get("selector"),
+                "filled": filled,
+                "confidence": confidence,
+                "reason": reason,
+            }
+        )
+
+    return field_results, fields_filled, fields_attempted, files_uploaded
+
+
+def _start_visible_review_session(
+    *,
+    db: Session,
+    job: Job,
+    packet: ApplicationPacket | None,
+    values: dict[str, Any],
+    manual_values: list[dict[str, str]],
+    warnings: list[str],
+    resolved_options: dict[str, Any],
+    sync_playwright: Any,
+    playwright_error_type: Any,
+    playwright_timeout_error_type: Any,
+    initial_status: str,
+) -> dict[str, Any]:
+    playwright_manager: Any | None = None
+    browser: Any | None = None
+    context_manager: Any | None = None
+    page: Any | None = None
+    started_logged = False
+    session_stored = False
+    fields_detected: list[dict[str, Any]] = []
+    field_results: list[dict[str, Any]] = []
+    blocked_actions: list[str] = []
+    files_uploaded: list[str] = []
+    fields_filled = 0
+    fields_attempted = 0
+
+    warnings.append(HEADED_REVIEW_MESSAGE)
+    cleanup_closed_sessions()
+    cleanup_expired_sessions(settings.playwright_keep_open_seconds)
+
+    if _url_appears_truncated(job.url):
+        summary = _invalid_truncated_url_summary(
+            job=job,
+            packet=packet,
+            warnings=warnings,
+            manual_values=manual_values,
+        )
+        save_session_summary(summary)
+        return summary
+
+    try:
+        with _xvfb_session_if_needed(False):
+            playwright_manager = sync_playwright()
+            playwright = playwright_manager.start()
+            browser = playwright.chromium.launch(
+                headless=False,
+                slow_mo=settings.playwright_slow_mo_ms,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            context_manager = browser.new_context()
+            page = context_manager.new_page()
+
+            promote_job_status_if_needed(db, job.id, "autofill_started", notes="Started a visible browser autofill session.")
+            db.refresh(job)
+            log_event(
+                db,
+                job_id=job.id,
+                packet_id=packet.id if packet else None,
+                event_type="autofill_started",
+                notes="Started a visible browser autofill session.",
+                old_status=initial_status,
+                new_status=job.application_status,
+                metadata_json={"url": job.url, "packet_id": packet.id if packet else None, "session_mode": "visible_review"},
+            )
+            started_logged = True
+
+            try:
+                response = page.goto(_browser_navigation_url(job.url), wait_until="domcontentloaded", timeout=settings.autofill_navigation_timeout_ms)
+            except playwright_timeout_error_type as exc:
+                summary = _classify_navigation_failure_summary(
+                    job=job,
+                    packet=packet,
+                    warnings=warnings,
+                    manual_values=manual_values,
+                    error_text=str(exc),
+                )
+                log_event(
+                    db,
+                    job_id=job.id,
+                    packet_id=packet.id if packet else None,
+                    event_type="autofill_navigation_failed",
+                    notes=summary["message"],
+                    old_status=initial_status,
+                    new_status=job.application_status,
+                    metadata_json={"url": job.url, "status": summary["status"], "details": summary.get("details")},
+                )
+                save_session_summary(summary)
+                return summary
+            except playwright_error_type as exc:
+                if _is_browser_closed_error(exc):
+                    summary = _browser_closed_summary(
+                        job=job,
+                        packet=packet,
+                        warnings=warnings,
+                        manual_values=manual_values,
+                    )
+                else:
+                    summary = _classify_navigation_failure_summary(
+                        job=job,
+                        packet=packet,
+                        warnings=warnings,
+                        manual_values=manual_values,
+                        error_text=str(exc),
+                    )
+                log_event(
+                    db,
+                    job_id=job.id,
+                    packet_id=packet.id if packet else None,
+                    event_type="autofill_navigation_failed",
+                    notes=summary["message"],
+                    old_status=initial_status,
+                    new_status=job.application_status,
+                    metadata_json={"url": job.url, "status": summary["status"], "details": summary.get("details")},
+                )
+                save_session_summary(summary)
+                return summary
+
+            if response is not None and response.status >= 400:
+                summary = _classify_navigation_failure_summary(
+                    job=job,
+                    packet=packet,
+                    warnings=warnings,
+                    manual_values=manual_values,
+                    error_text=f"HTTP {response.status} while loading {job.url}",
+                    response_status=response.status,
+                )
+                log_event(
+                    db,
+                    job_id=job.id,
+                    packet_id=packet.id if packet else None,
+                    event_type="autofill_navigation_failed",
+                    notes=summary["message"],
+                    old_status=initial_status,
+                    new_status=job.application_status,
+                    metadata_json={"url": job.url, "status": summary["status"], "http_status": response.status},
+                )
+                save_session_summary(summary)
+                return summary
+
+            warnings.extend(_detect_page_warnings(page))
+            fields_detected = detect_form_fields(page)
+            blocked_actions = _detect_blocked_actions(page)
+            apply_actions = _detect_apply_actions(page)
+            for action in apply_actions:
+                if action not in blocked_actions:
+                    blocked_actions.append(action)
+
+            if _is_workday_url(job.url):
+                warnings.append(
+                    "This appears to be a Workday job page. Workday job-detail pages often do not expose application form fields until the user proceeds manually."
+                )
+
+            if fields_detected:
+                field_results, fields_filled, fields_attempted, files_uploaded = _fill_safe_fields(
+                    page=page,
+                    fields_detected=fields_detected,
+                    values=values,
+                    warnings=warnings,
+                    allow_sensitive_optional=bool(resolved_options.get("fill_sensitive_optional_fields")),
+                    headless=False,
+                    playwright_error_type=playwright_error_type,
+                )
+            else:
+                if _is_workday_url(job.url) and apply_actions:
+                    warnings.append("An Apply button or link was found on this Workday page, but CareerAgent did not click it automatically.")
+                warnings.append(NO_FIELDS_REASON)
+
+            autofill_effective = fields_filled > 0 or bool(files_uploaded)
+            if fields_detected and not autofill_effective:
+                warnings.append(
+                    "CareerAgent detected fields but did not safely fill any of them. Review the field results and try the local test form or a direct application form URL."
+                )
+
+            session = create_session(
+                browser=browser,
+                context=context_manager,
+                page=page,
+                job_id=job.id,
+                opened_url=page.url,
+                mode="visible_review",
+                playwright_manager=playwright_manager,
+            )
+            session_stored = True
+            session_id = session["session_id"]
+
+            if not fields_detected:
+                summary_status = "no_fields_detected"
+                success = False
+                message = NO_FIELDS_MESSAGE
+                recommended_next_action = (
+                    "Open this Workday job in your default browser and proceed manually to the application form, "
+                    "or save the direct application form URL in CareerAgent."
+                    if _is_workday_url(job.url)
+                    else NO_FIELDS_NEXT_ACTION
+                )
+                event_type = "autofill_no_fields_detected"
+                event_notes = NO_FIELDS_MESSAGE
+            elif autofill_effective:
+                summary_status = "visible_session_started"
+                success = True
+                message = VISIBLE_SESSION_MESSAGE
+                recommended_next_action = "continue_in_visible_browser"
+                event_type = "autofill_completed"
+                event_notes = "Completed a visible browser autofill session and left the browser open for manual review."
+                promote_job_status_if_needed(db, job.id, "autofill_completed", notes=event_notes)
+                db.refresh(job)
+            else:
+                summary_status = "no_fields_filled"
+                success = False
+                message = "CareerAgent opened the form and detected fields, but it did not safely fill any values."
+                recommended_next_action = "Review the field results, generate a packet if files are missing, or continue manually in the visible browser."
+                event_type = "autofill_no_fields_filled"
+                event_notes = "Detected fields but did not safely fill any values."
+
+            summary = {
+                "success": success,
+                "autofill_effective": autofill_effective,
+                "can_continue_in_browser": True,
+                "job_id": job.id,
+                "packet_id": packet.id if packet else None,
+                "status": summary_status,
+                "mode": "visible_review",
+                "session_mode": "visible_review",
+                "session_id": session_id,
+                "browser_mode": "headed",
+                "opened_url": page.url,
+                "fields_detected": len(fields_detected),
+                "fields_filled": fields_filled,
+                "fields_skipped": max(len(fields_detected) - fields_filled, 0),
+                "files_uploaded": files_uploaded,
+                "blocked_actions": blocked_actions,
+                "warnings": warnings,
+                "manual_review_required": True,
+                "message": message,
+                "no_fields_reason": NO_FIELDS_REASON if not fields_detected else None,
+                "recommended_next_action": recommended_next_action,
+                "screenshot_path": None,
+                "screenshot_url": None,
+                "manual_values": manual_values,
+                "field_results": field_results,
+            }
+
+            log_event(
+                db,
+                job_id=job.id,
+                packet_id=packet.id if packet else None,
+                event_type=event_type,
+                notes=event_notes,
+                old_status=initial_status,
+                new_status=job.application_status,
+                metadata_json={
+                    "browser_mode": summary["browser_mode"],
+                    "opened_url": summary["opened_url"],
+                    "session_id": session_id,
+                    "session_mode": "visible_review",
+                    "can_continue_in_browser": True,
+                    "fields_detected": summary["fields_detected"],
+                    "fields_filled": summary["fields_filled"],
+                    "fields_attempted": fields_attempted,
+                    "files_uploaded": summary["files_uploaded"],
+                    "blocked_actions": summary["blocked_actions"],
+                    "application_status_advanced": bool(autofill_effective),
+                },
+            )
+            save_session_summary(summary)
+            return summary
+    except AutofillError:
+        raise
+    except playwright_error_type as exc:
+        if _is_browser_closed_error(exc):
+            summary = _browser_closed_summary(
+                job=job,
+                packet=packet,
+                warnings=warnings,
+                manual_values=manual_values,
+                fields_detected=len(fields_detected),
+                fields_filled=fields_filled,
+                fields_skipped=max(len(fields_detected) - fields_filled, 0),
+                files_uploaded=files_uploaded,
+                blocked_actions=blocked_actions,
+                field_results=field_results,
+            )
+            save_session_summary(summary)
+            return summary
+        if _is_chromium_missing_error(exc):
+            summary = _chromium_missing_summary(
+                job=job,
+                packet=packet,
+                session_mode="visible_review",
+                browser_mode="headed",
+                warnings=warnings,
+                manual_values=manual_values,
+                fields_detected=len(fields_detected),
+                fields_filled=fields_filled,
+                fields_skipped=max(len(fields_detected) - fields_filled, 0),
+                files_uploaded=files_uploaded,
+                blocked_actions=blocked_actions,
+                field_results=field_results,
+            )
+            save_session_summary(summary)
+            return summary
+        if _is_browser_display_error(exc):
+            summary = {
+                "success": False,
+                "autofill_effective": False,
+                "can_continue_in_browser": False,
+                "job_id": job.id,
+                "packet_id": packet.id if packet else None,
+                "status": "browser_display_unavailable",
+                "mode": "visible_review",
+                "session_mode": "visible_review",
+                "session_id": None,
+                "browser_mode": "headed",
+                "opened_url": job.url,
+                "fields_detected": len(fields_detected),
+                "fields_filled": fields_filled,
+                "fields_skipped": max(len(fields_detected) - fields_filled, 0),
+                "files_uploaded": files_uploaded,
+                "blocked_actions": blocked_actions,
+                "warnings": warnings,
+                "manual_review_required": True,
+                "message": DISPLAY_UNAVAILABLE_MESSAGE,
+                "suggested_fix": DISPLAY_UNAVAILABLE_FIX,
+                "recommended_next_action": DISPLAY_UNAVAILABLE_FIX,
+                "manual_values": manual_values,
+                "field_results": field_results,
+            }
+            save_session_summary(summary)
+            return summary
+        raise AutofillUnavailableError(_concise_playwright_error(exc)) from exc
+    except Exception as exc:
+        raise AutofillError(f"Visible autofill could not complete safely: {exc}") from exc
+    finally:
+        if not session_stored:
+            for resource in (context_manager, browser):
+                if resource is None:
+                    continue
+                try:
+                    resource.close()
+                except Exception:
+                    pass
+            if playwright_manager is not None:
+                try:
+                    if hasattr(playwright_manager, "stop"):
+                        playwright_manager.stop()
+                    elif hasattr(playwright_manager, "__exit__"):
+                        playwright_manager.__exit__(None, None, None)
+                except Exception:
+                    pass
+        if started_logged and not session_stored:
+            save_session_summary(
+                {
+                    "success": False,
+                    "autofill_effective": False,
+                    "can_continue_in_browser": False,
+                    "job_id": job.id,
+                    "packet_id": packet.id if packet else None,
+                    "status": "visible_session_failed",
+                    "mode": "visible_review",
+                    "session_mode": "visible_review",
+                    "session_id": None,
+                    "browser_mode": "headed",
+                    "opened_url": job.url,
+                    "fields_detected": len(fields_detected),
+                    "fields_filled": fields_filled,
+                    "fields_skipped": max(len(fields_detected) - fields_filled, 0),
+                    "files_uploaded": files_uploaded,
+                    "blocked_actions": blocked_actions,
+                    "warnings": warnings,
+                    "manual_review_required": True,
+                    "message": "Visible autofill started but did not reach a clean handoff state.",
+                    "manual_values": manual_values,
+                    "field_results": field_results,
+                }
+            )
+
+
 def start_autofill_session(
     db: Session,
     job_id: int,
@@ -733,24 +1705,68 @@ def start_autofill_session(
     job: Job = context["job"]
     packet: ApplicationPacket | None = context["packet"]
     values: dict[str, Any] = context["values"]
+    manual_values = _manual_values(values)
     warnings: list[str] = list(context["warnings"])
 
     support_status = _get_playwright_support_status()
+    session_mode = _resolve_session_mode(resolved_options)
+    headless = session_mode == "headless_test"
+    browser_mode = "headless" if headless else "headed"
+    keep_open_seconds = _keep_open_seconds_for_visible_mode(resolved_options) if session_mode == "visible_review" else 0
+    cleanup_closed_sessions()
+    cleanup_expired_sessions(settings.playwright_keep_open_seconds)
+
+    if session_mode == "visible_review" and settings.playwright_headless:
+        summary = {
+            "success": False,
+            "autofill_effective": False,
+            "can_continue_in_browser": False,
+            "job_id": job.id,
+            "packet_id": packet.id if packet else None,
+            "status": "visible_browser_required",
+            "mode": "visible_review",
+            "session_mode": session_mode,
+            "browser_mode": browser_mode,
+            "opened_url": job.url,
+            "fields_detected": 0,
+            "fields_filled": 0,
+            "fields_skipped": 0,
+            "files_uploaded": [],
+            "blocked_actions": [],
+            "warnings": warnings,
+            "manual_review_required": True,
+            "message": VISIBLE_UNAVAILABLE_MESSAGE,
+            "suggested_fix": VISIBLE_UNAVAILABLE_FIX,
+            "recommended_next_action": "open_in_browser_or_run_visible_local_backend",
+            "manual_values": manual_values,
+            "field_results": [],
+        }
+        save_session_summary(summary)
+        return summary
+
     if not support_status["playwright_installed"]:
         raise AutofillUnavailableError(
             "Playwright is not installed in this environment. Rebuild the backend with the new dependency and run 'python -m playwright install chromium'."
         )
-    if not support_status["chromium_installed"]:
-        raise AutofillUnavailableError(
-            "Chromium is not installed for Playwright in this environment. Run 'python -m playwright install chromium'."
-        )
 
     sync_playwright, PlaywrightError, PlaywrightTimeoutError = _load_playwright()
-    review_timeout_ms = max(settings.autofill_review_timeout_seconds, 0) * 1000
-    headless = settings.playwright_headless
-    browser_mode = _configured_browser_mode()
 
     initial_status = job.application_status
+    if session_mode == "visible_review":
+        return _start_visible_review_session(
+            db=db,
+            job=job,
+            packet=packet,
+            values=values,
+            manual_values=manual_values,
+            warnings=warnings,
+            resolved_options=resolved_options,
+            sync_playwright=sync_playwright,
+            playwright_error_type=PlaywrightError,
+            playwright_timeout_error_type=PlaywrightTimeoutError,
+            initial_status=initial_status,
+        )
+
     started_logged = False
     completed_logged = False
     fields_detected: list[dict[str, Any]] = []
@@ -758,10 +1774,12 @@ def start_autofill_session(
     blocked_actions: list[str] = []
     files_uploaded: list[str] = []
     fields_filled = 0
+    fields_attempted = 0
+    screenshot_path: str | None = None
     warnings.append(HEADLESS_REVIEW_MESSAGE if headless else HEADED_REVIEW_MESSAGE)
 
     try:
-        with _xvfb_session_if_needed(), sync_playwright() as playwright:
+        with _xvfb_session_if_needed(headless), sync_playwright() as playwright:
             browser = playwright.chromium.launch(
                 headless=headless,
                 slow_mo=settings.playwright_slow_mo_ms,
@@ -770,22 +1788,39 @@ def start_autofill_session(
             context_manager = browser.new_context()
             page = context_manager.new_page()
 
-            promote_job_status_if_needed(db, job.id, "autofill_started", notes="Started a Stage 8 browser autofill session.")
-            db.refresh(job)
-            log_event(
-                db,
-                job_id=job.id,
-                packet_id=packet.id if packet else None,
-                event_type="autofill_started",
-                notes="Started a Stage 8 browser autofill session.",
-                old_status=initial_status,
-                new_status=job.application_status,
-                metadata_json={"url": job.url, "packet_id": packet.id if packet else None},
-            )
+            if headless:
+                log_event(
+                    db,
+                    job_id=job.id,
+                    packet_id=packet.id if packet else None,
+                    event_type="autofill_diagnostic_started",
+                    notes="Started a headless autofill diagnostic test. Application status was not advanced.",
+                    old_status=initial_status,
+                    new_status=initial_status,
+                    metadata_json={
+                        "url": job.url,
+                        "packet_id": packet.id if packet else None,
+                        "session_mode": session_mode,
+                        "diagnostic": True,
+                    },
+                )
+            else:
+                promote_job_status_if_needed(db, job.id, "autofill_started", notes="Started a visible browser autofill session.")
+                db.refresh(job)
+                log_event(
+                    db,
+                    job_id=job.id,
+                    packet_id=packet.id if packet else None,
+                    event_type="autofill_started",
+                    notes="Started a visible browser autofill session.",
+                    old_status=initial_status,
+                    new_status=job.application_status,
+                    metadata_json={"url": job.url, "packet_id": packet.id if packet else None, "session_mode": session_mode},
+                )
             started_logged = True
 
             try:
-                page.goto(job.url, wait_until="domcontentloaded", timeout=settings.autofill_navigation_timeout_ms)
+                page.goto(_browser_navigation_url(job.url), wait_until="domcontentloaded", timeout=settings.autofill_navigation_timeout_ms)
             except PlaywrightTimeoutError as exc:
                 raise AutofillUnavailableError(
                     "The application page did not finish loading before the timeout. The site may be slow, blocked, or require login."
@@ -794,6 +1829,76 @@ def start_autofill_session(
             warnings.extend(_detect_page_warnings(page))
             fields_detected = detect_form_fields(page)
             blocked_actions = _detect_blocked_actions(page)
+            apply_actions = _detect_apply_actions(page)
+            for action in apply_actions:
+                if action not in blocked_actions:
+                    blocked_actions.append(action)
+            screenshot_path = _capture_screenshot(page, job.id, "page-loaded", warnings) if headless else None
+
+            if _is_workday_url(job.url):
+                warnings.append(
+                    "This appears to be a Workday job page. Workday job-detail pages often do not expose application form fields until the user proceeds manually."
+                )
+
+            if not fields_detected:
+                if _is_workday_url(job.url) and apply_actions:
+                    warnings.append(
+                        "An Apply button or link was found on this Workday page, but CareerAgent did not click it automatically."
+                    )
+                warnings.append(NO_FIELDS_REASON)
+                if not headless:
+                    _hold_visible_browser_for_review(page, keep_open_seconds, warnings)
+                summary = {
+                    "success": False,
+                    "autofill_effective": False,
+                    "can_continue_in_browser": not headless,
+                    "job_id": job.id,
+                    "packet_id": packet.id if packet else None,
+                    "status": "no_fields_detected",
+                    "session_mode": session_mode,
+                    "browser_mode": browser_mode,
+                    "opened_url": page.url,
+                    "fields_detected": 0,
+                    "fields_filled": 0,
+                    "fields_skipped": 0,
+                    "files_uploaded": files_uploaded,
+                    "blocked_actions": blocked_actions,
+                    "warnings": warnings,
+                    "manual_review_required": True,
+                    "message": NO_FIELDS_MESSAGE,
+                    "no_fields_reason": NO_FIELDS_REASON,
+                    "recommended_next_action": (
+                        "Open this Workday job in your default browser and proceed manually to the application form, "
+                        "or save the direct application form URL in CareerAgent."
+                        if _is_workday_url(job.url)
+                        else NO_FIELDS_NEXT_ACTION
+                    ),
+                    "screenshot_path": screenshot_path,
+                    "screenshot_url": _screenshot_url(screenshot_path),
+                    "manual_values": manual_values,
+                    "field_results": field_results,
+                }
+                log_event(
+                    db,
+                    job_id=job.id,
+                    packet_id=packet.id if packet else None,
+                    event_type="autofill_no_fields_detected",
+                    notes=NO_FIELDS_MESSAGE,
+                    old_status=initial_status,
+                    new_status=job.application_status,
+                    metadata_json={
+                        "browser_mode": summary["browser_mode"],
+                        "opened_url": summary["opened_url"],
+                        "blocked_actions": summary["blocked_actions"],
+                        "warnings": summary["warnings"],
+                        "screenshot_path": screenshot_path,
+                    },
+                )
+                completed_logged = True
+                save_session_summary(summary)
+                context_manager.close()
+                browser.close()
+                return summary
 
             allow_sensitive_optional = bool(resolved_options.get("fill_sensitive_optional_fields"))
             if headless and allow_sensitive_optional:
@@ -876,6 +1981,7 @@ def start_autofill_session(
                     continue
 
                 try:
+                    fields_attempted += 1
                     filled, reason = _apply_value_to_field(page, field, value)
                 except PlaywrightError as exc:
                     filled = False
@@ -897,15 +2003,26 @@ def start_autofill_session(
                     }
                 )
 
-            if not headless and review_timeout_ms > 0:
-                page.wait_for_timeout(review_timeout_ms)
-
-            summary_status = "autofill_completed"
+            screenshot_path = _capture_screenshot(page, job.id, "after-attempt", warnings) if headless else screenshot_path
+            autofill_effective = fields_filled > 0 or bool(files_uploaded)
+            if autofill_effective and headless:
+                summary_status = "headless_diagnostic_completed"
+            elif autofill_effective:
+                summary_status = "visible_autofill_completed"
+            else:
+                summary_status = "no_fields_filled"
+            if not autofill_effective:
+                warnings.append("CareerAgent detected fields but did not safely fill any of them. Review the field results and try the local test form or a direct application form URL.")
+            if not headless:
+                _hold_visible_browser_for_review(page, keep_open_seconds, warnings)
             summary = {
-                "success": True,
+                "success": autofill_effective,
+                "autofill_effective": autofill_effective,
+                "can_continue_in_browser": not headless,
                 "job_id": job.id,
                 "packet_id": packet.id if packet else None,
                 "status": summary_status,
+                "session_mode": session_mode,
                 "browser_mode": browser_mode,
                 "opened_url": page.url,
                 "fields_detected": len(fields_detected),
@@ -915,27 +2032,59 @@ def start_autofill_session(
                 "blocked_actions": blocked_actions,
                 "warnings": warnings,
                 "manual_review_required": True,
-                "message": HEADLESS_REVIEW_MESSAGE if headless else DEFAULT_REVIEW_MESSAGE,
+                "message": (
+                    (HEADLESS_REVIEW_MESSAGE if headless else DEFAULT_REVIEW_MESSAGE)
+                    if autofill_effective
+                    else "CareerAgent opened the form and detected fields, but it did not safely fill any values."
+                ),
+                "recommended_next_action": (
+                    "run_visible_autofill_or_open_default_browser"
+                    if autofill_effective and headless
+                    else None
+                    if autofill_effective
+                    else "Review the field results, generate a packet if files are missing, or use Open in Browser."
+                ),
+                "screenshot_path": screenshot_path,
+                "screenshot_url": _screenshot_url(screenshot_path),
+                "manual_values": manual_values,
                 "field_results": field_results,
             }
 
             status_before_completion = job.application_status
-            promote_job_status_if_needed(db, job.id, "autofill_completed", notes="Completed a Stage 8 browser autofill session.")
-            db.refresh(job)
+            if autofill_effective and not headless:
+                promote_job_status_if_needed(db, job.id, "autofill_completed", notes="Completed a visible browser autofill session.")
+                db.refresh(job)
             log_event(
                 db,
                 job_id=job.id,
                 packet_id=packet.id if packet else None,
-                event_type="autofill_completed",
-                notes="Completed a Stage 8 browser autofill session.",
+                event_type=(
+                    "autofill_diagnostic_completed"
+                    if autofill_effective and headless
+                    else "autofill_completed"
+                    if autofill_effective
+                    else "autofill_no_fields_filled"
+                ),
+                notes=(
+                    "Completed a headless autofill diagnostic test. Application status was not advanced."
+                    if autofill_effective and headless
+                    else "Completed a visible browser autofill session."
+                    if autofill_effective
+                    else "Detected fields but did not safely fill any values."
+                ),
                 old_status=status_before_completion if started_logged else initial_status,
                 new_status=job.application_status,
                 metadata_json={
                     "browser_mode": summary["browser_mode"],
                     "fields_detected": summary["fields_detected"],
                     "fields_filled": summary["fields_filled"],
+                    "fields_attempted": fields_attempted,
                     "files_uploaded": summary["files_uploaded"],
                     "blocked_actions": summary["blocked_actions"],
+                    "screenshot_path": screenshot_path,
+                    "session_mode": session_mode,
+                    "diagnostic": headless,
+                    "application_status_advanced": bool(autofill_effective and not headless),
                 },
             )
             completed_logged = True
@@ -948,12 +2097,32 @@ def start_autofill_session(
     except PlaywrightTimeoutError as exc:
         raise AutofillUnavailableError("The browser timed out while interacting with the application page.") from exc
     except PlaywrightError as exc:
+        if _is_chromium_missing_error(exc):
+            summary = _chromium_missing_summary(
+                job=job,
+                packet=packet,
+                session_mode=session_mode,
+                browser_mode=browser_mode,
+                warnings=warnings,
+                manual_values=manual_values,
+                fields_detected=len(fields_detected),
+                fields_filled=fields_filled,
+                fields_skipped=max(len(fields_detected) - fields_filled, 0),
+                files_uploaded=files_uploaded,
+                blocked_actions=blocked_actions,
+                field_results=field_results,
+            )
+            save_session_summary(summary)
+            return summary
         if _is_browser_display_error(exc):
             summary = {
                 "success": False,
+                "autofill_effective": False,
+                "can_continue_in_browser": False,
                 "job_id": job.id,
                 "packet_id": packet.id if packet else None,
                 "status": "browser_display_unavailable",
+                "session_mode": session_mode,
                 "browser_mode": browser_mode,
                 "opened_url": job.url,
                 "fields_detected": len(fields_detected),
@@ -965,6 +2134,8 @@ def start_autofill_session(
                 "manual_review_required": True,
                 "message": DISPLAY_UNAVAILABLE_MESSAGE,
                 "suggested_fix": DISPLAY_UNAVAILABLE_FIX,
+                "recommended_next_action": DISPLAY_UNAVAILABLE_FIX,
+                "manual_values": manual_values,
                 "field_results": field_results,
             }
             save_session_summary(summary)
@@ -977,9 +2148,12 @@ def start_autofill_session(
             save_session_summary(
                 {
                     "success": False,
+                    "autofill_effective": False,
+                    "can_continue_in_browser": False,
                     "job_id": job.id,
                     "packet_id": packet.id if packet else None,
-                    "status": "autofill_started",
+                    "status": "headless_autofill_test_started" if headless else "autofill_started",
+                    "session_mode": session_mode,
                     "browser_mode": browser_mode,
                     "opened_url": job.url,
                     "fields_detected": len(fields_detected),
@@ -990,6 +2164,7 @@ def start_autofill_session(
                     "warnings": warnings,
                     "manual_review_required": True,
                     "message": "Autofill started but did not reach a clean completion state. Review the browser and tracker logs manually.",
+                    "manual_values": manual_values,
                     "field_results": field_results,
                 }
             )

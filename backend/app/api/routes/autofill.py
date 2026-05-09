@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db.database import get_db
 from app.schemas.autofill import (
     AutofillPreviewRequest,
     AutofillPreviewResponse,
     AutofillSafetyResponse,
+    AutofillSessionCleanupResponse,
+    AutofillSessionCloseResponse,
+    AutofillSessionListResponse,
     AutofillStartRequest,
     AutofillStartResponse,
     AutofillStatusResponse,
@@ -21,6 +29,7 @@ from app.services.browser_agent import (
     preview_autofill_plan,
     start_autofill_session,
 )
+from app.services.browser_agent.session_store import cleanup_closed_sessions, cleanup_expired_sessions, close_session, list_sessions
 
 router = APIRouter()
 
@@ -41,6 +50,39 @@ def autofill_status() -> AutofillStatusResponse:
 @router.get("/safety", response_model=AutofillSafetyResponse)
 def autofill_safety() -> AutofillSafetyResponse:
     return AutofillSafetyResponse(**get_autofill_safety())
+
+
+@router.get("/sessions", response_model=AutofillSessionListResponse)
+def autofill_sessions() -> AutofillSessionListResponse:
+    return AutofillSessionListResponse(sessions=list_sessions())
+
+
+@router.post("/sessions/{session_id}/close", response_model=AutofillSessionCloseResponse)
+def autofill_close_session(session_id: str) -> AutofillSessionCloseResponse:
+    closed = close_session(session_id)
+    return AutofillSessionCloseResponse(success=True, session=closed)
+
+
+@router.post("/sessions/cleanup", response_model=AutofillSessionCleanupResponse)
+def autofill_cleanup_sessions(max_age_seconds: int | None = None) -> AutofillSessionCleanupResponse:
+    closed = cleanup_closed_sessions()
+    closed.extend(cleanup_expired_sessions(max_age_seconds or settings.playwright_keep_open_seconds))
+    return AutofillSessionCleanupResponse(success=True, closed_sessions=closed)
+
+
+@router.get("/screenshots/{filename}")
+def autofill_screenshot(filename: str) -> FileResponse:
+    if not re.fullmatch(r"job_\d+_[A-Za-z0-9T_-]+\.png", filename):
+        raise HTTPException(status_code=404, detail="Screenshot was not found.")
+    screenshot_dir = (settings.outputs_dir / "autofill_screenshots").resolve()
+    path = (screenshot_dir / filename).resolve()
+    try:
+        path.relative_to(screenshot_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Screenshot was not found.") from exc
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Screenshot was not found.")
+    return FileResponse(path, media_type="image/png")
 
 
 @router.post("/dry-run", response_model=AutofillPreviewResponse)

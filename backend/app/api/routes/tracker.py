@@ -118,7 +118,14 @@ def tracker_open_application(
         job, event, url = open_application_link(db, job_id)
     except ValueError as exc:
         _raise_from_value_error(exc)
-    return OpenApplicationResponse(job=job, event=event, url=url)
+    return OpenApplicationResponse(
+        success=True,
+        job_id=job.id,
+        job=job,
+        event=event,
+        url=url,
+        message="Application opened in your browser. CareerAgent logged this. Complete and submit manually, then return and mark applied.",
+    )
 
 
 @router.get("/events", response_model=list[ApplicationEventRead])

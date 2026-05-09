@@ -1,6 +1,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 def _parse_bool(value: str | None, default: bool = False) -> bool:
@@ -12,9 +13,29 @@ def _parse_bool(value: str | None, default: bool = False) -> bool:
 def _find_project_root() -> Path:
     current = Path(__file__).resolve()
     for candidate in current.parents:
+        if (candidate / "docker-compose.yml").exists() and (candidate / "data").exists():
+            return candidate
+    for candidate in current.parents:
         if (candidate / "data").exists():
             return candidate
     return current.parents[2]
+
+
+def _running_in_docker() -> bool:
+    return Path("/.dockerenv").exists()
+
+
+def _default_database_url() -> str:
+    host = "db" if _running_in_docker() else "localhost"
+    return f"postgresql+psycopg2://careeragent:careeragent@{host}:5432/careeragent"
+
+
+def _database_host_hint(database_url: str) -> str:
+    try:
+        parsed = urlparse(database_url)
+    except Exception:
+        return "unknown"
+    return parsed.hostname or "unknown"
 
 
 class Settings:
@@ -29,8 +50,10 @@ class Settings:
         self.postgres_port = int(os.getenv("POSTGRES_PORT", "5432"))
         self.database_url = os.getenv(
             "DATABASE_URL",
-            "postgresql+psycopg2://careeragent:careeragent@db:5432/careeragent",
+            _default_database_url(),
         )
+        self.backend_runtime = "docker" if _running_in_docker() else "local"
+        self.database_host_hint = _database_host_hint(self.database_url)
         self.backend_port = int(os.getenv("BACKEND_PORT", "8000"))
         self.frontend_port = int(os.getenv("FRONTEND_PORT", "3000"))
         self.enable_sample_jobs = _parse_bool(os.getenv("ENABLE_SAMPLE_JOBS"), default=False)
@@ -44,6 +67,7 @@ class Settings:
         self.playwright_slow_mo_ms = int(
             os.getenv("PLAYWRIGHT_SLOW_MO_MS", os.getenv("CAREERAGENT_AUTOFILL_SLOW_MO_MS", "0"))
         )
+        self.playwright_keep_open_seconds = int(os.getenv("PLAYWRIGHT_KEEP_OPEN_SECONDS", "900"))
         self.autofill_slow_mo_ms = self.playwright_slow_mo_ms
 
     @property

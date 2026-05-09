@@ -12,7 +12,8 @@ type TrackerSummaryState = Awaited<ReturnType<typeof getTrackerSummary>>;
 const STATUS_GROUPS = [
   { title: "Found / Saved", statuses: ["found", "saved", "verified_open"] },
   { title: "Packet Ready", statuses: ["packet_ready"] },
-  { title: "Application Opened", statuses: ["application_opened", "autofill_started", "autofill_completed"] },
+  { title: "Application Opened", statuses: ["application_opened", "autofill_started"] },
+  { title: "Autofill Diagnostics", statuses: ["autofill_completed"] },
   { title: "Applied", statuses: ["applied_manual"] },
   { title: "Follow Up", statuses: ["follow_up"] },
   { title: "Interview", statuses: ["interview"] },
