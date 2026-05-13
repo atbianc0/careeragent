@@ -17,6 +17,11 @@ CareerAgent must never click final submit, apply, confirm, or equivalent end-sta
 
 CareerAgent must never invent experience, skills, credentials, companies, dates, results, education, or work authorization details.
 
+## Quick Run
+```bash
+ ./scripts/docker-up-open.sh
+```
+
 ## Project Map
 
 For a full file-by-file overview of the app structure, routes, backend services, models, and workflows, see:
