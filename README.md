@@ -17,13 +17,12 @@ CareerAgent must never click final submit, apply, confirm, or equivalent end-sta
 
 CareerAgent must never invent experience, skills, credentials, companies, dates, results, education, or work authorization details.
 
-<<<<<<< HEAD
 ## Project Map
 
 For a full file-by-file overview of the app structure, routes, backend services, models, and workflows, see:
 
 [PROJECT_MAP.md](./PROJECT_MAP.md)
-=======
+
 ## Product Workflow
 
 1. Fill Profile.
@@ -37,7 +36,6 @@ For a full file-by-file overview of the app structure, routes, backend services,
 9. Track outcomes in Insights.
 
 AI assistance is optional and only runs after an explicit AI-assisted apply click. CareerAgent never submits applications. Follow-ups are hidden from the main workflow for now, Tracker lives in Insights, and the job detail page is secondary/advanced only.
->>>>>>> 1b90ff4 (Update UI and add AI autofill flow)
 
 ## Current Stage
 
