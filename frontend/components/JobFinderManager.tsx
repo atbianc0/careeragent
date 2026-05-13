@@ -13,6 +13,7 @@ import {
   type SavedSourceSearchResult,
   type JobFinderStatus,
   type DegreeFilter,
+  type LocationFilter,
   generateJobFinderQueries,
   getJobCandidates,
   getJobFinderRuns,
@@ -21,8 +22,8 @@ import {
   getJobSources,
   getJobSourceSummary,
   importJobSourceFile,
-  importJobCandidate,
-  importSelectedJobCandidates,
+  saveCandidate,
+  saveSelectedCandidates,
   runJobFinder,
   searchSavedJobSources,
   updateJobSource,
@@ -52,6 +53,22 @@ const DEFAULT_DEGREE_FILTER: DegreeFilter = {
   allow_phd_required: false,
   allow_unknown: true,
 };
+const DEFAULT_LOCATION_FILTER: LocationFilter = {
+  allow_bay_area: true,
+  allow_remote_us: true,
+  allow_unknown: true,
+  allow_non_bay_area_california: false,
+  allow_other_us: false,
+  allow_international: false,
+};
+const LOCATION_OPTIONS: Array<{ key: keyof LocationFilter; label: string; fit: string }> = [
+  { key: "allow_bay_area", label: "Bay Area", fit: "bay_area" },
+  { key: "allow_remote_us", label: "Remote US", fit: "remote_us" },
+  { key: "allow_unknown", label: "Unknown location", fit: "unknown" },
+  { key: "allow_non_bay_area_california", label: "Non-Bay Area California", fit: "non_bay_area_california" },
+  { key: "allow_other_us", label: "Other US", fit: "other_us" },
+  { key: "allow_international", label: "International", fit: "international" },
+];
 const DEGREE_OPTIONS: Array<{ key: keyof DegreeFilter; label: string }> = [
   { key: "allow_no_degree", label: "No degree mentioned" },
   { key: "allow_bachelors", label: "Bachelor's required/accepted" },
@@ -62,14 +79,26 @@ const DEGREE_OPTIONS: Array<{ key: keyof DegreeFilter; label: string }> = [
   { key: "allow_unknown", label: "Unknown degree requirement" },
 ];
 const DEFAULT_QUERIES = [
-  "new grad data scientist bay area",
-  "entry level data scientist san francisco",
-  "new college grad machine learning engineer bay area",
-  "data engineer new grad bay area",
-  "analytics engineer entry level san francisco",
-  "data analyst new grad bay area",
-  "software engineer machine learning new grad bay area",
-  "early career research engineer machine learning bay area",
+  "data scientist",
+  "data engineer",
+  "machine learning engineer",
+  "ml engineer",
+  "ai engineer",
+  "analytics engineer",
+  "data analyst",
+  "product analyst",
+  "business intelligence analyst",
+  "software engineer data",
+  "software engineer machine learning",
+  "software engineer ai",
+  "research engineer",
+  "applied scientist",
+  "applied ai engineer",
+  "new grad",
+  "entry level",
+  "early career",
+  "bay area",
+  "remote us",
 ];
 const EXAMPLE_SOURCES = {
   lever: "https://jobs.lever.co/zoox",
@@ -183,12 +212,20 @@ function degreeDisplay(candidate: JobCandidate) {
   return "Unknown";
 }
 
+function candidateDescription(candidate: JobCandidate) {
+  return (candidate.job_description || candidate.description_snippet || "").trim();
+}
+
 function sameSet(left: string[], right: string[]) {
   return [...left].sort().join("|") === [...right].sort().join("|");
 }
 
 function degreeFilterEquals(left: DegreeFilter, right: DegreeFilter) {
   return DEGREE_OPTIONS.every((option) => left[option.key] === right[option.key]);
+}
+
+function locationFilterEquals(left: LocationFilter, right: LocationFilter) {
+  return LOCATION_OPTIONS.every((option) => left[option.key] === right[option.key]);
 }
 
 function experienceSummary(levels: string[]) {
@@ -204,6 +241,20 @@ function degreeSummary(filter: DegreeFilter) {
   return labels.length > 0 ? labels.join(", ") : "Default Bachelor's-friendly restored before search";
 }
 
+function locationSummary(filter: LocationFilter) {
+  const labels = LOCATION_OPTIONS.filter((option) => filter[option.key]).map((option) => option.label);
+  return labels.length > 0 ? labels.join(", ") : "Default Bay Area target restored before search";
+}
+
+function locationFitLabel(fit?: string | null) {
+  if (fit === "bay_area") return "Bay Area";
+  if (fit === "remote_us") return "Remote US";
+  if (fit === "non_bay_area_california") return "California";
+  if (fit === "other_us") return "Other US";
+  if (fit === "international") return "International";
+  return "Unknown";
+}
+
 function runFitSummary(run: JobDiscoveryRun) {
   const metadata = run.metadata_json || {};
   const matchMode = typeof metadata.match_mode === "string" ? metadata.match_mode : "balanced";
@@ -214,7 +265,18 @@ function runFitSummary(run: JobDiscoveryRun) {
   const degreeFilter = metadata.degree_filter && typeof metadata.degree_filter === "object"
     ? { ...DEFAULT_DEGREE_FILTER, ...(metadata.degree_filter as Partial<DegreeFilter>) }
     : DEFAULT_DEGREE_FILTER;
-  return `${matchMode} - ${experienceSummary(experienceLevels)} - ${degreeSummary(degreeFilter)}${maxSources ? ` - max sources ${maxSources}` : ""}`;
+  const savedLocationFilter = metadata.location_filter && typeof metadata.location_filter === "object"
+    ? { ...DEFAULT_LOCATION_FILTER, ...(metadata.location_filter as Partial<LocationFilter>) }
+    : DEFAULT_LOCATION_FILTER;
+  return `${matchMode} - ${experienceSummary(experienceLevels)} - ${degreeSummary(degreeFilter)} - ${locationSummary(savedLocationFilter)}${maxSources ? ` - max sources ${maxSources}` : ""}`;
+}
+
+function savedSourceDetailsSummary(results: SavedSourceSearchResult[]) {
+  const sources = results.length;
+  const fetched = results.reduce((total, result) => total + result.jobs_fetched, 0);
+  const matches = results.reduce((total, result) => total + result.matches, 0);
+  const warnings = results.reduce((total, result) => total + result.warnings.length + result.errors.length, 0);
+  return `${sources} sources checked, ${fetched.toLocaleString()} jobs fetched, ${matches} matches, ${warnings} warnings/errors`;
 }
 
 export function JobFinderManager() {
@@ -230,8 +292,7 @@ export function JobFinderManager() {
   const [matchMode, setMatchMode] = useState<"strict" | "balanced" | "broad">("balanced");
   const [targetExperienceLevels, setTargetExperienceLevels] = useState<string[]>(DEFAULT_EXPERIENCE_LEVELS);
   const [degreeFilter, setDegreeFilter] = useState<DegreeFilter>(DEFAULT_DEGREE_FILTER);
-  const [autoVerify, setAutoVerify] = useState(false);
-  const [autoScore, setAutoScore] = useState(false);
+  const [locationFilter, setLocationFilter] = useState<LocationFilter>(DEFAULT_LOCATION_FILTER);
   const [sourceSummary, setSourceSummary] = useState<JobSourceSummary | null>(null);
   const [savedSources, setSavedSources] = useState<JobSource[]>([]);
   const [candidates, setCandidates] = useState<JobCandidate[]>([]);
@@ -246,6 +307,8 @@ export function JobFinderManager() {
   const [totalMatches, setTotalMatches] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [showAllCandidates, setShowAllCandidates] = useState(false);
+  const [showSourceDetails, setShowSourceDetails] = useState(false);
+  const [aiQueryAssistEnabled, setAiQueryAssistEnabled] = useState(false);
   const [sourceRequired, setSourceRequired] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -363,11 +426,70 @@ export function JobFinderManager() {
     }
   }
 
+  function setLocationPreset(preset: "bay-area" | "california" | "us-wide" | "any") {
+    if (preset === "bay-area") setLocationFilter(DEFAULT_LOCATION_FILTER);
+    if (preset === "california") {
+      setLocationFilter({
+        allow_bay_area: true,
+        allow_remote_us: true,
+        allow_unknown: true,
+        allow_non_bay_area_california: true,
+        allow_other_us: false,
+        allow_international: false,
+      });
+    }
+    if (preset === "us-wide") {
+      setLocationFilter({
+        allow_bay_area: true,
+        allow_remote_us: true,
+        allow_unknown: true,
+        allow_non_bay_area_california: true,
+        allow_other_us: true,
+        allow_international: false,
+      });
+    }
+    if (preset === "any") {
+      setLocationFilter({
+        allow_bay_area: true,
+        allow_remote_us: true,
+        allow_unknown: true,
+        allow_non_bay_area_california: true,
+        allow_other_us: true,
+        allow_international: true,
+      });
+    }
+  }
+
   function activeDegreePreset(preset: "bachelors" | "exclude-grad" | "masters" | "phd" | "any") {
     if (preset === "bachelors" || preset === "exclude-grad") return degreeFilterEquals(degreeFilter, DEFAULT_DEGREE_FILTER);
     if (preset === "masters") return degreeFilterEquals(degreeFilter, { ...DEFAULT_DEGREE_FILTER, allow_masters_required: true });
     if (preset === "phd") return degreeFilterEquals(degreeFilter, { ...DEFAULT_DEGREE_FILTER, allow_masters_required: true, allow_phd_required: true });
     return DEGREE_OPTIONS.every((option) => degreeFilter[option.key]);
+  }
+
+  function activeLocationPreset(preset: "bay-area" | "california" | "us-wide" | "any") {
+    if (preset === "bay-area") return locationFilterEquals(locationFilter, DEFAULT_LOCATION_FILTER);
+    if (preset === "california") {
+      return locationFilterEquals(locationFilter, {
+        allow_bay_area: true,
+        allow_remote_us: true,
+        allow_unknown: true,
+        allow_non_bay_area_california: true,
+        allow_other_us: false,
+        allow_international: false,
+      });
+    }
+    if (preset === "us-wide") {
+      return locationFilterEquals(locationFilter, {
+        allow_bay_area: true,
+        allow_remote_us: true,
+        allow_unknown: true,
+        allow_non_bay_area_california: true,
+        allow_other_us: true,
+        allow_international: false,
+      });
+    }
+    return LOCATION_OPTIONS.every((option) => locationFilter[option.key]);
   }
 
   function excludedExperienceLevels() {
@@ -392,13 +514,22 @@ export function JobFinderManager() {
     return DEFAULT_DEGREE_FILTER;
   }
 
+  function requestLocationFilter() {
+    if (LOCATION_OPTIONS.some((option) => locationFilter[option.key])) {
+      return locationFilter;
+    }
+    setLocationFilter(DEFAULT_LOCATION_FILTER);
+    setMessage("Location filters were empty, so CareerAgent restored the Bay Area target default.");
+    return DEFAULT_LOCATION_FILTER;
+  }
+
   function ensureSourceType(sourceType: string) {
     setSourceTypes((current) => (current.includes(sourceType) ? current : [...current, sourceType]));
   }
 
   function useDefaultQueries() {
     setQueries(DEFAULT_QUERIES.join("\n"));
-    setMessage("Default Bay Area early-career data/ML queries loaded.");
+    setMessage("Broad default Job Finder keywords loaded.");
     setError(null);
   }
 
@@ -407,6 +538,7 @@ export function JobFinderManager() {
     setSourceTypes(DEFAULT_SOURCES);
     setExperiencePreset("target");
     setDegreePreset("bachelors");
+    setLocationPreset("bay-area");
     setQueries(DEFAULT_QUERIES.join("\n"));
     setMessage("Default search loaded: Bay Area, early-career data/ML roles, and source-based ATS discovery.");
     setError(null);
@@ -436,9 +568,23 @@ export function JobFinderManager() {
     setError(null);
     setMessage(null);
     try {
-      const response = await generateJobFinderQueries({ use_ai: useAi, provider: useAi ? "openai" : "mock" });
+      if (useAi && !aiQueryAssistEnabled) {
+        setMessage("Enable optional AI query generation before requesting AI search keyword help.");
+        return;
+      }
+      const response = await generateJobFinderQueries({
+        use_ai: useAi,
+        user_enabled: useAi ? aiQueryAssistEnabled : false,
+        user_triggered: true,
+      });
       setQueries(response.queries.join("\n"));
-      setMessage(useAi ? "AI-assisted queries generated. Review them before running discovery." : "Rule-based queries generated.");
+      setMessage(
+        useAi
+          ? response.api_used
+            ? `${response.provider || "Selected AI provider"} suggested search keywords. Matching, filtering, and scoring stay local.`
+            : `AI query generation did not use an external API. ${response.warnings.join(" ") || "Rule-based keywords were loaded."}`
+          : "Rule-based search keywords generated locally.",
+      );
     } catch (queryError) {
       setError(queryError instanceof Error ? queryError.message : "Failed to generate queries.");
     } finally {
@@ -492,6 +638,7 @@ export function JobFinderManager() {
     try {
       const safeExperienceLevels = requestExperienceLevels();
       const safeDegreeFilter = requestDegreeFilter();
+      const safeLocationFilter = requestLocationFilter();
       const response = await searchSavedJobSources({
         ats_types: atsTypes,
         use_enabled_sources: true,
@@ -506,12 +653,15 @@ export function JobFinderManager() {
         target_experience_levels: safeExperienceLevels,
         excluded_experience_levels: safeExperienceLevels.includes("senior") ? [] : ["senior"],
         degree_filter: safeDegreeFilter,
+        allow_unknown_location: safeLocationFilter.allow_unknown,
+        location_filter: safeLocationFilter,
       });
       setCandidates(response.candidates);
       setSummary(response.summary);
       setSavedSourceResults(response.source_results || []);
       setDiagnostics(response.diagnostics || null);
       setSourceResults([]);
+      setShowSourceDetails(false);
       setSelected(new Set());
       setCurrentRunId(response.run_id);
       setShowAllCandidates(false);
@@ -604,6 +754,7 @@ export function JobFinderManager() {
     try {
       const safeExperienceLevels = requestExperienceLevels();
       const safeDegreeFilter = requestDegreeFilter();
+      const safeLocationFilter = requestLocationFilter();
       const response = await runJobFinder({
         source_types: sourceTypes,
         queries: lines(queries),
@@ -611,17 +762,20 @@ export function JobFinderManager() {
         source_urls: validSourceUrls,
         manual_links: validManualLinks,
         max_jobs: maxJobs,
-        auto_verify: autoVerify,
-        auto_score: autoScore,
+        auto_verify: true,
+        auto_score: true,
         match_mode: matchMode,
         target_experience_levels: safeExperienceLevels,
         excluded_experience_levels: safeExperienceLevels.includes("senior") ? [] : ["senior"],
         degree_filter: safeDegreeFilter,
+        allow_unknown_location: safeLocationFilter.allow_unknown,
+        location_filter: safeLocationFilter,
       });
       setCandidates(response.candidates);
       setSummary(response.summary);
       setSourceResults(response.source_results || []);
       setSavedSourceResults([]);
+      setShowSourceDetails(false);
       setDiagnostics(null);
       setSelected(new Set());
       setCurrentRunId(response.run.id);
@@ -658,10 +812,15 @@ export function JobFinderManager() {
   async function handleImport(candidateId: number) {
     setBusy(`import-${candidateId}`);
     setError(null);
+    setMessage("Saving, verifying, and scoring...");
     try {
-      const response = await importJobCandidate(candidateId, { auto_verify: autoVerify, auto_score: autoScore });
+      const response = await saveCandidate(candidateId);
       setCandidates((current) => current.map((candidate) => (candidate.id === candidateId ? response.candidate : candidate)));
-      setMessage(`Imported ${response.job.company} - ${response.job.title}. Open saved job #${response.job.id} from the table.`);
+      setMessage(
+        response.verified && response.scored
+          ? "Saved. View in Saved Jobs."
+          : `Saved. View in Saved Jobs. Verification/scoring may need retry. ${response.warnings.join(" ")}`,
+      );
       await refreshRuns();
     } catch (importError) {
       setError(importError instanceof Error ? importError.message : "Failed to import candidate.");
@@ -678,9 +837,14 @@ export function JobFinderManager() {
     }
     setBusy("import-selected");
     setError(null);
+    setMessage("Saving, verifying, and scoring selected jobs...");
     try {
-      const response = await importSelectedJobCandidates({ candidate_ids: candidateIds, auto_verify: autoVerify, auto_score: autoScore });
-      setMessage(`Imported ${response.imported_count} candidates. ${response.skipped_count} skipped.`);
+      const response = await saveSelectedCandidates(candidateIds);
+      setMessage(
+        response.imported_count > 0
+          ? "Saved jobs. View them in Saved Jobs."
+          : `No new jobs were saved. ${response.skipped_count} skipped.`,
+      );
       if (response.errors.length > 0) {
         setError(response.errors.join(" "));
       }
@@ -699,6 +863,7 @@ export function JobFinderManager() {
     setSourceResults([]);
     setSavedSourceResults([]);
     setDiagnostics(null);
+    setShowSourceDetails(false);
     setSelected(new Set());
     setCurrentRunId(null);
     setResultOffset(0);
@@ -711,33 +876,11 @@ export function JobFinderManager() {
 
   return (
     <div className="page">
-      <section className="panel-grid">
-        <article className="panel">
-          <h2>Search Profile</h2>
-          <ul className="list">
-            <li>Roles: Data Scientist, Data Engineer, ML Engineer, Analytics Engineer, Data Analyst, Software Engineer - Data/ML.</li>
-            <li>Location: Bay Area first; US remote only when relevant.</li>
-            <li>Exclude/deprioritize: Senior, Staff, Principal, Lead, Manager, Master's/PhD required, 5+ years.</li>
-          </ul>
-        </article>
-        <article className="panel">
-          <h2>Source Database Workflow</h2>
-          <ol className="list">
-            <li>Import the generated source CSV or JSON.</li>
-            <li>Search saved Lever, Greenhouse, Ashby, Workday, or all enabled sources.</li>
-            <li>Review the first 5 matches, page through the run, and import selected jobs.</li>
-            <li>LinkedIn and Indeed stay manual only. CareerAgent never auto-applies.</li>
-          </ol>
-        </article>
-      </section>
-
       <section className="panel">
         <div className="section-title">
           <div>
             <h2>Source Database</h2>
-            <p className="subtle">
-              CareerAgent searches your saved ATS source database. Import the generated source CSV/JSON, then search enabled sources for matching jobs.
-            </p>
+            <p className="subtle">Search sources and save jobs you want to apply to.</p>
           </div>
           <button className="button secondary compact" type="button" onClick={() => void handleRefreshSources()} disabled={busy !== null}>
             Refresh Source Summary
@@ -803,14 +946,29 @@ export function JobFinderManager() {
             Generate Queries
           </button>
           <button className="button secondary" type="button" onClick={() => void handleGenerateQueries(true)} disabled={busy !== null}>
-            Generate AI Queries
+            Generate AI Search Keywords
           </button>
           <button className="button ghost" type="button" onClick={useDefaultQueries}>
-            Use Default Queries
+            Use Broad Default Keywords
           </button>
         </div>
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={aiQueryAssistEnabled}
+            onChange={(event) => setAiQueryAssistEnabled(event.target.checked)}
+          />
+          <span>Enable optional AI query generation for the next explicit click</span>
+        </label>
+        <p className="subtle">
+          AI query generation only suggests search keywords. Saved-source searching, matching, filtering, and scoring stay local/rule-based.
+        </p>
         <label className="field-group">
-          <span>Queries</span>
+          <span>Search Keywords</span>
+          <span className="subtle">These keywords guide ranking. They are not exact required phrases.</span>
+          <span className="subtle">
+            Default keywords: data scientist, data engineer, machine learning engineer, analytics engineer, data analyst, software engineer data, new grad, entry level, early career, Bay Area, Remote US.
+          </span>
           <textarea className="input" rows={8} value={queries} onChange={(event) => setQueries(event.target.value)} />
         </label>
       </section>
@@ -863,6 +1021,7 @@ export function JobFinderManager() {
             <div className="message">
               <p><strong>Experience:</strong> {experienceSummary(targetExperienceLevels)}</p>
               <p><strong>Degree:</strong> {degreeSummary(degreeFilter)}</p>
+              <p><strong>Location:</strong> {locationSummary(locationFilter)}</p>
             </div>
             <div className="filter-row">
               <div className="field-group">
@@ -909,6 +1068,27 @@ export function JobFinderManager() {
                   ))}
                 </div>
               </div>
+            </div>
+          </div>
+          <div className="details-block">
+            <h3>Location Fit Filters</h3>
+            <div className="button-row">
+              <button className={`button compact ${activeLocationPreset("bay-area") ? "secondary" : "ghost"}`} type="button" onClick={() => setLocationPreset("bay-area")}>Bay Area target</button>
+              <button className={`button compact ${activeLocationPreset("california") ? "secondary" : "ghost"}`} type="button" onClick={() => setLocationPreset("california")}>California</button>
+              <button className={`button compact ${activeLocationPreset("us-wide") ? "secondary" : "ghost"}`} type="button" onClick={() => setLocationPreset("us-wide")}>US-wide</button>
+              <button className={`button compact ${activeLocationPreset("any") ? "secondary" : "ghost"}`} type="button" onClick={() => setLocationPreset("any")}>Any location</button>
+            </div>
+            <div className="checkbox-grid">
+              {LOCATION_OPTIONS.map((option) => (
+                <label className="checkbox-row" key={option.key}>
+                  <input
+                    type="checkbox"
+                    checked={locationFilter[option.key]}
+                    onChange={(event) => setLocationFilter((current) => ({ ...current, [option.key]: event.target.checked }))}
+                  />
+                  <span>{option.label}</span>
+                </label>
+              ))}
             </div>
           </div>
           <div className="button-row">
@@ -1006,14 +1186,7 @@ https://www.company.com/careers`}
             {busy === "run" ? "Finding Jobs..." : "Find Jobs from Manual URLs"}
           </button>
         </details>
-        <div className="button-row">
-          <label className="checkbox-row">
-            <input type="checkbox" checked={autoVerify} onChange={(event) => setAutoVerify(event.target.checked)} /> Auto-verify imported jobs
-          </label>
-          <label className="checkbox-row">
-            <input type="checkbox" checked={autoScore} onChange={(event) => setAutoScore(event.target.checked)} /> Auto-score imported jobs
-          </label>
-        </div>
+        <p className="subtle">Saved candidates are automatically verified and scored.</p>
         {message ? <p className="message success">{message}</p> : null}
         {error ? <p className="message error">{error}</p> : null}
       </section>
@@ -1053,7 +1226,7 @@ https://www.company.com/careers`}
             </p>
           </div>
           <button className="button secondary compact" type="button" onClick={() => void handleImportSelected()} disabled={busy !== null || selected.size === 0}>
-            Import Selected
+            Save Selected
           </button>
         </div>
         <div className="button-row">
@@ -1145,52 +1318,62 @@ https://www.company.com/careers`}
 
         {savedSourceResults.length > 0 ? (
           <div className="source-results">
-            <h3>Saved Source Results</h3>
-            <div className="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Company</th>
-                    <th>ATS</th>
-                    <th>Status</th>
-                    <th>Fetched</th>
-                    <th>Matches</th>
-                    <th>Saved</th>
-                    <th>Good</th>
-                    <th>Weak</th>
-                    <th>Excluded</th>
-                    <th>Duplicates</th>
-                    <th>Incomplete</th>
-                    <th>Notes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {savedSourceResults.map((result, index) => (
-                    <tr key={`${result.source_id}-${result.base_url}-${index}`}>
-                      <td>
-                        <div className="status-stack">
-                          <span>{result.company || "Unknown"}</span>
-                          <a className="inline-link" href={result.base_url} target="_blank" rel="noreferrer">
-                            Source URL
-                          </a>
-                        </div>
-                      </td>
-                      <td>{result.ats_type}</td>
-                      <td><span className={sourceStatusClass(result.status)}>{result.status}</span></td>
-                      <td>{result.jobs_fetched}</td>
-                      <td>{result.matches}</td>
-                      <td>{result.candidates_saved}</td>
-                      <td>{result.good_match}</td>
-                      <td>{result.weak_match}</td>
-                      <td>{result.excluded}</td>
-                      <td>{result.duplicates}</td>
-                      <td>{result.skipped_incomplete}</td>
-                      <td>{[...result.warnings, ...result.errors].join(" ") || "No source warnings."}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="section-title">
+              <div>
+                <h3>Saved Source Results</h3>
+                <p className="subtle">{savedSourceDetailsSummary(savedSourceResults)}</p>
+              </div>
+              <button className="button secondary compact" type="button" onClick={() => setShowSourceDetails((current) => !current)}>
+                {showSourceDetails ? "Hide source details" : "Show source details"}
+              </button>
             </div>
+            {showSourceDetails ? (
+              <div className="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Company</th>
+                      <th>ATS</th>
+                      <th>Status</th>
+                      <th>Fetched</th>
+                      <th>Matches</th>
+                      <th>Saved</th>
+                      <th>Good</th>
+                      <th>Weak</th>
+                      <th>Excluded</th>
+                      <th>Duplicates</th>
+                      <th>Incomplete</th>
+                      <th>Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {savedSourceResults.map((result, index) => (
+                      <tr key={`${result.source_id}-${result.base_url}-${index}`}>
+                        <td>
+                          <div className="status-stack">
+                            <span>{result.company || "Unknown"}</span>
+                            <a className="inline-link" href={result.base_url} target="_blank" rel="noreferrer">
+                              Source URL
+                            </a>
+                          </div>
+                        </td>
+                        <td>{result.ats_type}</td>
+                        <td><span className={sourceStatusClass(result.status)}>{result.status}</span></td>
+                        <td>{result.jobs_fetched}</td>
+                        <td>{result.matches}</td>
+                        <td>{result.candidates_saved}</td>
+                        <td>{result.good_match}</td>
+                        <td>{result.weak_match}</td>
+                        <td>{result.excluded}</td>
+                        <td>{result.duplicates}</td>
+                        <td>{result.skipped_incomplete}</td>
+                        <td>{[...result.warnings, ...result.errors].join(" ") || "No source warnings."}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -1210,6 +1393,12 @@ https://www.company.com/careers`}
                 ["excluded by location", diagnostics?.excluded_by_location ?? 0],
                 ["excluded by role", diagnostics?.excluded_by_role ?? 0],
                 ["excluded by confidence", diagnostics?.excluded_by_low_confidence ?? 0],
+                ["Bay Area found", diagnostics?.bay_area_found ?? 0],
+                ["Remote US found", diagnostics?.remote_us_found ?? 0],
+                ["Unknown location found", diagnostics?.unknown_location_found ?? 0],
+                ["California found", diagnostics?.non_bay_area_california_found ?? 0],
+                ["Other US found", diagnostics?.other_us_found ?? 0],
+                ["International found", diagnostics?.international_found ?? 0],
                 ["duplicates", diagnostics?.duplicates ?? summary.duplicates ?? 0],
                 ["incomplete", diagnostics?.incomplete ?? summary.skipped_incomplete ?? 0],
               ].map(([label, value]) => (
@@ -1296,6 +1485,7 @@ https://www.company.com/careers`}
                   <th>Company</th>
                   <th>Title</th>
                   <th>Location</th>
+                  <th>Location Fit</th>
                   <th>Experience</th>
                   <th>Degree</th>
                   <th>Role</th>
@@ -1303,6 +1493,7 @@ https://www.company.com/careers`}
                   <th>Score</th>
                   <th>Status</th>
                   <th>Why it matched</th>
+                  <th>Description</th>
                   <th>URL</th>
                   <th>Action</th>
                 </tr>
@@ -1323,12 +1514,13 @@ https://www.company.com/careers`}
                           }
                           return next;
                         })}
-                        disabled={["duplicate", "imported", "excluded", "incomplete"].includes(candidate.filter_status)}
+                        disabled={Boolean(candidate.imported_job_id) || ["duplicate", "imported", "excluded", "incomplete"].includes(candidate.filter_status)}
                       />
                     </td>
                     <td>{candidate.company}</td>
                     <td>{candidate.title || "Missing title"}</td>
                     <td>{candidate.location || "Location unknown"}</td>
+                    <td><span className={candidateStatusClass(candidate.location_fit || "unknown")}>{locationFitLabel(candidate.location_fit)}</span></td>
                     <td>
                       <div className="status-stack">
                         <span className={candidateStatusClass(candidate.experience_level || "unknown")}>{experienceDisplay(candidate)}</span>
@@ -1354,11 +1546,21 @@ https://www.company.com/careers`}
                         </details>
                       ) : null}
                     </td>
+                    <td>
+                      {candidateDescription(candidate) ? (
+                        <details className="details-block">
+                          <summary>View description</summary>
+                          <p>{candidateDescription(candidate)}</p>
+                        </details>
+                      ) : (
+                        "Missing"
+                      )}
+                    </td>
                     <td>{candidate.url ? <a className="inline-link" href={candidate.url} target="_blank" rel="noreferrer">Open</a> : "None"}</td>
                     <td>
                       {candidate.imported_job_id ? (
                         <Link className="inline-link" href={`/jobs/${candidate.imported_job_id}`}>
-                          Job #{candidate.imported_job_id}
+                          Saved
                         </Link>
                       ) : (
                         <button
@@ -1367,7 +1569,7 @@ https://www.company.com/careers`}
                           onClick={() => void handleImport(candidate.id)}
                           disabled={busy !== null || ["duplicate", "excluded", "incomplete"].includes(candidate.filter_status)}
                         >
-                          Import
+                          Save Job
                         </button>
                       )}
                     </td>

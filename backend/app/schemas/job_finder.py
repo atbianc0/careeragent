@@ -26,7 +26,8 @@ class JobFinderStatusResponse(BaseModel):
 
 class JobFinderQueryRequest(BaseModel):
     use_ai: bool = False
-    provider: str = "mock"
+    user_enabled: bool = False
+    user_triggered: bool = True
 
 
 class JobFinderQueryResponse(BaseModel):
@@ -34,6 +35,11 @@ class JobFinderQueryResponse(BaseModel):
     queries: list[str] = Field(default_factory=list)
     default_queries: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    api_used: bool = False
+    provider: str | None = None
+    api_action: str | None = None
+    model: str | None = None
+    blocked_reason: str | None = None
 
 
 class JobFinderRunRequest(BaseModel):
@@ -58,6 +64,17 @@ class JobFinderRunRequest(BaseModel):
             "allow_phd_preferred": True,
             "allow_phd_required": False,
             "allow_unknown": True,
+        }
+    )
+    allow_unknown_location: bool = True
+    location_filter: dict[str, bool] = Field(
+        default_factory=lambda: {
+            "allow_bay_area": True,
+            "allow_remote_us": True,
+            "allow_unknown": True,
+            "allow_non_bay_area_california": False,
+            "allow_other_us": False,
+            "allow_international": False,
         }
     )
 
@@ -150,6 +167,17 @@ class SavedSourceSearchRequest(BaseModel):
             "allow_phd_preferred": True,
             "allow_phd_required": False,
             "allow_unknown": True,
+        }
+    )
+    allow_unknown_location: bool = True
+    location_filter: dict[str, bool] = Field(
+        default_factory=lambda: {
+            "allow_bay_area": True,
+            "allow_remote_us": True,
+            "allow_unknown": True,
+            "allow_non_bay_area_california": False,
+            "allow_other_us": False,
+            "allow_international": False,
         }
     )
 

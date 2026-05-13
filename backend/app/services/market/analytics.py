@@ -10,7 +10,6 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.services.ai import build_market_insights_prompt, check_no_unsupported_claims, get_ai_provider
 from app.models.application_event import ApplicationEvent
 from app.models.application_packet import ApplicationPacket
 from app.models.job import Job
@@ -789,81 +788,8 @@ def _rule_based_recommended_insights(db: Session) -> list[dict[str, Any]]:
     return insights[:8]
 
 
-def _parse_ai_insight_text(text: str) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for line in str(text or "").splitlines():
-        cleaned = line.strip().lstrip("-* ").strip()
-        if not cleaned or cleaned.lower().startswith("ai draft") or cleaned.lower().startswith("mockprovider"):
-            continue
-        title = "AI Insight"
-        detail = cleaned
-        if ": " in cleaned:
-            maybe_title, maybe_detail = cleaned.split(": ", 1)
-            if len(maybe_title) <= 60:
-                title = maybe_title.strip().rstrip(".")
-                detail = maybe_detail.strip()
-        rows.append({"title": title, "detail": detail, "category": "ai_draft"})
-    return rows[:6]
-
-
-def get_recommended_insights(
-    db: Session,
-    *,
-    use_ai: bool = False,
-    provider_name: str | None = None,
-) -> list[dict[str, Any]]:
-    rule_based = _rule_based_recommended_insights(db)
-    if not use_ai:
-        return rule_based
-
-    provider = get_ai_provider(provider_name)
-    if not provider.is_available():
-        return rule_based + [
-            {
-                "title": "AI provider unavailable",
-                "detail": provider.unavailable_reason or "Falling back to rule-based insights.",
-                "category": "ai_fallback",
-            }
-        ]
-
-    market_data = {
-        "pipeline_summary": get_pipeline_summary(db),
-        "score_summary": get_score_summary(db),
-        "outcome_summary": get_outcome_summary(db),
-        "response_rates": get_response_rates(db),
-        "top_requested_skills": get_top_requested_skills(db, limit=5),
-        "top_missing_skills": get_top_missing_skills(db, limit=5),
-        "stale_jobs": get_stale_jobs(db)[:5],
-    }
-    ai_response = provider.generate_text(
-        "market_insights",
-        build_market_insights_prompt(market_data),
-        context={"market_data": market_data},
-    )
-    if not ai_response.get("success"):
-        return rule_based + [
-            {
-                "title": "AI insights fell back to rule-based mode",
-                "detail": "; ".join(list(ai_response.get("warnings") or [])) or "The AI provider did not return usable insights.",
-                "category": "ai_fallback",
-            }
-        ]
-
-    safety = check_no_unsupported_claims(str(ai_response.get("content") or ""), {}, json.dumps(market_data, default=str))
-    ai_rows = _parse_ai_insight_text(str(safety.get("content") or ""))
-    if not ai_rows:
-        return rule_based
-
-    warnings = list(ai_response.get("warnings") or []) + list(safety.get("warnings") or [])
-    if warnings:
-        ai_rows.append(
-            {
-                "title": "AI review note",
-                "detail": "; ".join(warnings[:3]),
-                "category": "ai_warning",
-            }
-        )
-    return ai_rows
+def get_recommended_insights(db: Session) -> list[dict[str, Any]]:
+    return _rule_based_recommended_insights(db)
 
 
 def _safe_export_jobs(db: Session) -> list[dict[str, Any]]:

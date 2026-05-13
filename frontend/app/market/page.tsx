@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { StatCard } from "@/components/StatCard";
-import { getAIStatus, getMarketDashboard, getMarketExport, getMarketInsights, type MarketDashboard } from "@/lib/api";
+import { getMarketDashboard, getMarketExport, getMarketInsights, type MarketDashboard } from "@/lib/api";
 
 function formatScore(value: number | null | undefined) {
   if (value === null || value === undefined) {
@@ -272,22 +272,14 @@ function ResponseRatesTable({
 }
 
 type MarketPageProps = {
-  searchParams?: Promise<{
-    use_ai?: string | string[];
-    provider?: string | string[];
-  }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 export default async function MarketPage({ searchParams }: MarketPageProps) {
-  const resolvedSearchParams = (await searchParams) || {};
-  const useAIParam = Array.isArray(resolvedSearchParams.use_ai) ? resolvedSearchParams.use_ai[0] : resolvedSearchParams.use_ai;
-  const providerParam = Array.isArray(resolvedSearchParams.provider) ? resolvedSearchParams.provider[0] : resolvedSearchParams.provider;
-  const useAI = useAIParam === "true";
-  const insightProvider = providerParam === "openai" || providerParam === "local" ? providerParam : "mock";
-  const [dashboard, aiStatus, insights] = await Promise.all([
+  await searchParams;
+  const [dashboard, insights] = await Promise.all([
     getMarketDashboard(),
-    getAIStatus(),
-    getMarketInsights(useAI, insightProvider),
+    getMarketInsights(),
   ]);
   const exportJsonUrl = getMarketExport("json");
   const exportCsvUrl = getMarketExport("csv");
@@ -321,14 +313,6 @@ export default async function MarketPage({ searchParams }: MarketPageProps) {
           <a href={exportCsvUrl} className="button secondary" target="_blank" rel="noreferrer">
             Export CSV
           </a>
-          <Link href={useAI ? "/market" : `/market?use_ai=true&provider=mock`} className="button secondary">
-            {useAI ? "Show Rule-Based Insights" : "Generate AI Insights"}
-          </Link>
-          {aiStatus.openai_available ? (
-            <Link href="/market?use_ai=true&provider=openai" className="button secondary">
-              Use OpenAI Insights
-            </Link>
-          ) : null}
         </div>
       </section>
 
@@ -578,16 +562,7 @@ export default async function MarketPage({ searchParams }: MarketPageProps) {
             ))}
           </ul>
         )}
-        {useAI ? (
-          <p className="subtle">
-            AI insight mode is on via {insightProvider}. AI output is a draft summary of stored data and should be reviewed manually.
-          </p>
-        ) : (
-          <p className="subtle">Rule-based insights are shown by default. AI summaries are optional and reviewable.</p>
-        )}
-        {!aiStatus.openai_available ? (
-          <p className="subtle">OpenAI is not available right now. CareerAgent can still generate MockProvider insight drafts safely.</p>
-        ) : null}
+        <p className="subtle">Insights are generated from saved jobs, tracker events, and source data using local processing.</p>
         <p className="subtle">{dashboard.note}</p>
       </section>
     </div>

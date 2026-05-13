@@ -79,7 +79,13 @@ def status() -> JobFinderStatusResponse:
 
 @router.post("/generate-queries", response_model=JobFinderQueryResponse)
 def generate_job_finder_queries(payload: JobFinderQueryRequest) -> JobFinderQueryResponse:
-    return JobFinderQueryResponse(**generate_queries(use_ai=payload.use_ai, provider=payload.provider))
+    return JobFinderQueryResponse(
+        **generate_queries(
+            use_ai=payload.use_ai,
+            user_enabled=payload.user_enabled,
+            user_triggered=payload.user_triggered,
+        )
+    )
 
 
 @router.post("/run", response_model=JobFinderRunResponse)
@@ -227,8 +233,9 @@ def import_selected_candidates(
     errors: list[str] = []
     for candidate_id in payload.candidate_ids:
         try:
-            result = import_candidate(db, candidate_id, auto_verify=payload.auto_verify, auto_score=payload.auto_score)
+            result = import_candidate(db, candidate_id, auto_verify=True, auto_score=True)
             jobs.append(result["job"])
+            errors.extend(result.get("warnings") or [])
         except ValueError as exc:
             errors.append(str(exc))
     return JobCandidateImportSelectedResponse(
@@ -239,15 +246,27 @@ def import_selected_candidates(
     )
 
 
-@router.post("/candidates/{candidate_id}/import", response_model=JobCandidateImportResponse)
-def import_one_candidate(
+@router.post("/candidates/{candidate_id}/save", response_model=JobCandidateImportResponse)
+def save_one_candidate(
     candidate_id: int,
-    auto_verify: bool = False,
-    auto_score: bool = False,
     db: Session = Depends(get_db),
 ) -> JobCandidateImportResponse:
     try:
-        result = import_candidate(db, candidate_id, auto_verify=auto_verify, auto_score=auto_score)
+        result = import_candidate(db, candidate_id, auto_verify=True, auto_score=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JobCandidateImportResponse(**result)
+
+
+@router.post("/candidates/{candidate_id}/import", response_model=JobCandidateImportResponse)
+def import_one_candidate(
+    candidate_id: int,
+    auto_verify: bool = True,
+    auto_score: bool = True,
+    db: Session = Depends(get_db),
+) -> JobCandidateImportResponse:
+    try:
+        result = import_candidate(db, candidate_id, auto_verify=True, auto_score=True)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JobCandidateImportResponse(**result)

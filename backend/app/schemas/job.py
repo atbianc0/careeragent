@@ -186,8 +186,6 @@ class JobImportRequest(FlexibleJobModel):
     input_type: Literal["description", "url"]
     content: str
     source: str = "manual"
-    use_ai: bool = False
-    provider: str = "mock"
 
 
 class JobParseResult(JobBase):

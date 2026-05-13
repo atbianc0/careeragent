@@ -5,18 +5,16 @@ import { useEffect, useMemo, useState } from "react";
 
 import { JobTable, type JobTableRow } from "@/components/JobTable";
 import {
-  type AIProviderInfo,
-  type AIStatus,
   type Job,
   type JobImportRequest,
   type JobParseResult,
   type RecommendationResponse,
   type ScoreAllSummary,
   type VerifyAllSummary,
-  getAIProviders,
-  getAIStatus,
   getJob,
+  getAppliedJobs,
   getJobs,
+  getSavedJobs,
   getRecommendations,
   importJob,
   parseJobImport,
@@ -24,19 +22,20 @@ import {
   verifyAllJobs,
 } from "@/lib/api";
 
-export type JobsManagerView = "saved" | "recommended" | "manual";
+export type JobsManagerView = "saved" | "applied" | "manual" | "recommended";
 
-const ACTIVE_FILTERS = [
-  { key: "active", label: "All active" },
-  { key: "recommended", label: "Recommended" },
-  { key: "needs_verification", label: "Needs verification" },
-  { key: "needs_scoring", label: "Needs scoring" },
-  { key: "packet_ready", label: "Packet ready" },
-  { key: "opened", label: "Opened" },
-  { key: "applied", label: "Applied" },
-  { key: "follow_up", label: "Follow-up" },
-  { key: "closed", label: "Closed/rejected" },
-];
+const SAVED_STATUSES = new Set([
+  "saved",
+  "ready_to_apply",
+  "verified_open",
+  "packet_ready",
+  "application_opened",
+  "applying",
+  "autofill_started",
+  "autofill_completed",
+]);
+
+const APPLIED_STATUSES = new Set(["applied", "applied_manual", "interview", "rejected", "offer", "withdrawn", "closed_after_apply"]);
 
 function formatSalaryRange(job: {
   salary_min: number | null;
@@ -125,33 +124,60 @@ function isTestJob(job: Job) {
   );
 }
 
+function formatDisplayStatus(value: string) {
+  const labels: Record<string, string> = {
+    saved: "Saved",
+    ready_to_apply: "Ready to Apply",
+    verified_open: "Ready to Apply",
+    packet_ready: "Ready to Apply",
+    application_opened: "Applying",
+    applying: "Applying",
+    autofill_started: "Applying",
+    autofill_completed: "Applying",
+    applied: "Applied",
+    applied_manual: "Applied",
+    interview: "Interview",
+    rejected: "Rejected",
+    offer: "Offer",
+    withdrawn: "Withdrawn",
+    closed_before_apply: "Closed",
+    closed_after_apply: "Closed",
+  };
+  return labels[value] || value.replace(/_/g, " ");
+}
+
+function outcomeForJob(job: Job) {
+  if (job.offer_at || job.application_status === "offer") return "Offer";
+  if (job.interview_at || job.application_status === "interview") return "Interview";
+  if (job.rejected_at || job.application_status === "rejected") return "Rejected";
+  if (job.withdrawn_at || job.application_status === "withdrawn") return "Withdrawn";
+  if (job.application_status === "closed_after_apply") return "Closed";
+  return "Pending";
+}
+
 function isClosedJob(job: Job) {
-  return ["rejected", "withdrawn", "closed_before_apply", "closed"].includes(job.application_status) || job.verification_status === "closed";
+  return ["rejected", "withdrawn", "closed_before_apply", "closed_after_apply", "closed"].includes(job.application_status) || job.verification_status === "closed";
+}
+
+function isSavedJob(job: Job) {
+  return SAVED_STATUSES.has(job.application_status) && !job.applied_at;
+}
+
+function isAppliedJob(job: Job) {
+  return APPLIED_STATUSES.has(job.application_status) || job.applied_at !== null;
 }
 
 function getNextAction(job: Job) {
   if (isClosedJob(job)) {
-    return { label: "Review archive", href: `/jobs/${job.id}`, tone: "secondary" as const };
+    return { label: "View Details", href: `/jobs/${job.id}`, tone: "secondary" as const };
   }
-  if (job.application_status === "applied_manual" || job.application_status === "follow_up" || job.interview_at) {
-    return { label: "Track outcome", href: `/jobs/${job.id}`, tone: "secondary" as const };
+  if (APPLIED_STATUSES.has(job.application_status) || job.applied_at || job.interview_at) {
+    return { label: "View in Insights", href: "/insights", tone: "secondary" as const };
   }
-  if (job.application_status === "application_opened") {
-    return { label: "Mark applied or follow up", href: `/jobs/${job.id}`, tone: "primary" as const };
+  if (job.application_status === "application_opened" || job.application_status === "autofill_started" || job.application_status === "autofill_completed") {
+    return { label: "Continue Apply", href: `/apply?jobId=${job.id}`, tone: "primary" as const };
   }
-  if (job.application_status === "packet_ready") {
-    return { label: "Open/apply", href: `/jobs/${job.id}`, tone: "primary" as const };
-  }
-  if (job.verification_status === "unknown") {
-    return { label: "Verify job", href: `/jobs/${job.id}`, tone: "primary" as const };
-  }
-  if (job.scoring_status !== "scored") {
-    return { label: "Score fit", href: `/jobs/${job.id}`, tone: "primary" as const };
-  }
-  if (job.overall_priority_score >= 65) {
-    return { label: "Generate packet", href: `/jobs/${job.id}`, tone: "primary" as const };
-  }
-  return { label: "Open job", href: `/jobs/${job.id}`, tone: "secondary" as const };
+  return { label: "Apply", href: `/apply?jobId=${job.id}`, tone: "primary" as const };
 }
 
 function descriptionTextForJob(job: Job | null) {
@@ -179,40 +205,10 @@ function descriptionParagraphs(job: Job | null) {
     .filter(Boolean);
 }
 
-function jobMatchesFilter(job: Job, filter: string) {
-  if (filter === "recommended") {
-    return job.scoring_status === "scored" && job.overall_priority_score >= 65 && !isClosedJob(job);
-  }
-  if (filter === "needs_verification") {
-    return job.verification_status === "unknown" && !isClosedJob(job);
-  }
-  if (filter === "needs_scoring") {
-    return job.scoring_status !== "scored" && !isClosedJob(job);
-  }
-  if (filter === "packet_ready") {
-    return job.application_status === "packet_ready";
-  }
-  if (filter === "opened") {
-    return job.application_status === "application_opened";
-  }
-  if (filter === "applied") {
-    return ["applied_manual", "interview", "offer"].includes(job.application_status);
-  }
-  if (filter === "follow_up") {
-    return job.application_status === "follow_up" || Boolean(job.follow_up_at);
-  }
-  if (filter === "closed") {
-    return isClosedJob(job);
-  }
-  return !isClosedJob(job);
-}
-
 const defaultRequest: JobImportRequest = {
   input_type: "description",
   content: "",
   source: "manual",
-  use_ai: false,
-  provider: "mock",
 };
 
 export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
@@ -226,12 +222,8 @@ export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
   const [scoringAll, setScoringAll] = useState(false);
   const [verifySummary, setVerifySummary] = useState<VerifyAllSummary | null>(null);
   const [scoreSummary, setScoreSummary] = useState<ScoreAllSummary | null>(null);
-  const [aiStatus, setAIStatus] = useState<AIStatus | null>(null);
-  const [providerOptions, setProviderOptions] = useState<AIProviderInfo[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [lastSavedJobId, setLastSavedJobId] = useState<number | null>(null);
-  const [savedFilter, setSavedFilter] = useState("active");
   const [search, setSearch] = useState("");
   const [showTestJobs, setShowTestJobs] = useState(false);
   const [showDuplicates, setShowDuplicates] = useState(false);
@@ -265,12 +257,20 @@ export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
           isDuplicate,
           duplicateOfJobId,
           isTestJob: isTestJob(job),
-          activeDisplayStatus: job.application_status === "autofill_completed" ? "autofill test completed" : job.application_status,
+          activeDisplayStatus: job.application_status,
         };
       })
       .filter((row) => (showTestJobs ? true : !row.isTestJob))
       .filter((row) => (showDuplicates ? true : !row.isDuplicate))
-      .filter((row) => jobMatchesFilter(row.job, savedFilter))
+      .filter((row) => {
+        if (view === "applied") {
+          return isAppliedJob(row.job);
+        }
+        if (view === "saved") {
+          return isSavedJob(row.job);
+        }
+        return true;
+      })
       .filter((row) => {
         if (!searchTerm) {
           return true;
@@ -283,7 +283,7 @@ export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
         }
         return right.job.id - left.job.id;
       });
-  }, [jobs, savedFilter, search, showDuplicates, showTestJobs]);
+  }, [jobs, search, showDuplicates, showTestJobs, view]);
 
   const visibleRecommendations = useMemo(
     () => (recommendations?.jobs || []).filter((job) => (showTestJobs ? true : !isTestJob(job))),
@@ -291,7 +291,7 @@ export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
   );
 
   async function loadJobs() {
-    const response = await getJobs();
+    const response = view === "applied" ? await getAppliedJobs() : view === "saved" ? await getSavedJobs() : await getJobs();
     setJobs(response);
   }
 
@@ -303,7 +303,11 @@ export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
   async function refreshData() {
     setLoading(true);
     try {
-      await Promise.all([loadJobs(), loadRecommendations()]);
+      if (view === "recommended") {
+        await Promise.all([loadJobs(), loadRecommendations()]);
+      } else {
+        await loadJobs();
+      }
       setError(null);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load jobs and recommendations.");
@@ -312,25 +316,9 @@ export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
     }
   }
 
-  async function loadAIConfig() {
-    try {
-      const [statusResponse, providersResponse] = await Promise.all([getAIStatus(), getAIProviders()]);
-      setAIStatus(statusResponse);
-      setProviderOptions(providersResponse.providers);
-    } catch {
-      setAIStatus(null);
-      setProviderOptions([
-        { name: "mock", available: true, message: null },
-        { name: "openai", available: false, message: "Unavailable." },
-        { name: "local", available: false, message: "Placeholder provider." },
-      ]);
-    }
-  }
-
   useEffect(() => {
     void refreshData();
-    void loadAIConfig();
-  }, []);
+  }, [view]);
 
   useEffect(() => {
     if (!descriptionModalOpen) {
@@ -368,7 +356,6 @@ export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
     setSubmitting(true);
     setMessage(null);
     setError(null);
-    setLastSavedJobId(null);
 
     try {
       const response = await parseJobImport(form);
@@ -384,14 +371,16 @@ export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
     setSubmitting(true);
     setMessage(null);
     setError(null);
-    setLastSavedJobId(null);
     setVerifySummary(null);
     setScoreSummary(null);
 
     try {
       const response = await importJob(form);
-      setMessage(`Imported and saved job #${response.id}.`);
-      setLastSavedJobId(response.id);
+      if (response.verification_status === "unknown" || response.scoring_status !== "scored") {
+        setMessage("Saved. View in Saved Jobs. Verification/scoring may need retry.");
+      } else {
+        setMessage("Saved. View in Saved Jobs.");
+      }
       setPreview((currentPreview) =>
         currentPreview
           ? {
@@ -482,7 +471,7 @@ export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
             <div className="button-row description-modal-actions">
               {selectedDescriptionJob ? (
                 <Link href={`/jobs/${selectedDescriptionJob.id}`} className="button secondary compact">
-                  Open Job Detail
+                  Advanced Details
                 </Link>
               ) : null}
               {selectedDescriptionJob?.url ? (
@@ -558,8 +547,8 @@ export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
                   ))}
                 </ul>
                 <div className="button-row">
-                  <Link href={`/jobs/${job.id}`} className="button secondary compact">
-                    Open Job
+                  <Link href={`/apply?jobId=${job.id}`} className="button secondary compact">
+                    Apply
                   </Link>
                   <span className="subtle">Next: {getNextAction(job).label}</span>
                 </div>
@@ -580,12 +569,10 @@ export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
             Use Job Finder
           </Link>
         </div>
-        <p className="subtle">
-          Paste a job description or URL when Job Finder does not cover the source. Most new jobs should start in Discover.
-        </p>
+        <p className="subtle">Paste a job URL or description when discovery misses something.</p>
         <ul className="list">
           <li>Rule-based parsing remains the default and only fills fields CareerAgent can honestly infer.</li>
-          <li>AI parsing is a draft enhancement and still must not invent experience, credentials, or work authorization facts.</li>
+          <li>Job parsing is local/rule-based. AI/API is not used for job parsing.</li>
           <li>Verification is still rule-based and may be limited on JavaScript-heavy or blocked job pages.</li>
           <li>Scoring is still deterministic in the current workflow and may miss context or hidden requirements.</li>
         </ul>
@@ -618,35 +605,10 @@ export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
             />
           </label>
 
-          <label className="field-group">
-            <span>Use AI Parsing</span>
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                checked={Boolean(form.use_ai)}
-                onChange={(event) => setForm((current) => ({ ...current, use_ai: event.target.checked }))}
-              />
-              <span>AI parsing is optional. Rule-based parsing is used by default.</span>
-            </label>
-          </label>
-
-          <label className="field-group">
-            <span>AI Provider</span>
-            <select
-              className="input"
-              value={form.provider || "mock"}
-              onChange={(event) => setForm((current) => ({ ...current, provider: event.target.value }))}
-            >
-              {(providerOptions.length > 0 ? providerOptions : [{ name: "mock", available: true, message: null }]).map((provider) => (
-                <option key={provider.name} value={provider.name}>
-                  {provider.name} {provider.available ? "" : "(unavailable)"}
-                </option>
-              ))}
-            </select>
-            <span className="subtle">
-              {aiStatus?.message || "CareerAgent falls back safely if the selected provider is unavailable."}
-            </span>
-          </label>
+          <div className="message">
+            Job parsing is local/rule-based. External AI/API calls are blocked for job URL parsing, extraction, skills,
+            degree, and experience parsing.
+          </div>
 
           <label className="field-group">
             <span>{form.input_type === "url" ? "Job URL" : "Job Description"}</span>
@@ -674,18 +636,13 @@ export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
             Preview Parse
           </button>
           <button className="button" type="button" onClick={handleImport} disabled={submitting}>
-            Import and Save
+            {submitting ? "Saving, verifying, and scoring..." : "Save Job"}
           </button>
         </div>
 
         {message ? (
           <p className="message success">
-            {message}{" "}
-            {lastSavedJobId !== null ? (
-              <Link href={`/jobs/${lastSavedJobId}`} className="inline-link">
-                Open saved job
-              </Link>
-            ) : null}
+            {message}
           </p>
         ) : null}
         {error ? <p className="message error">{error}</p> : null}
@@ -729,8 +686,8 @@ export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
                   <dd>{preview.seniority_level || "Unknown"}</dd>
                   <dt>Remote Status</dt>
                   <dd>{preview.remote_status || "Unknown"}</dd>
-                  <dt>Provider</dt>
-                  <dd>{preview.provider || "rule_based"}</dd>
+                  <dt>Parsing Mode</dt>
+                  <dd>{preview.parse_mode || "rule_based"}</dd>
                   <dt>Salary</dt>
                   <dd>{formatSalaryRange(preview)}</dd>
                   <dt>Years Experience</dt>
@@ -802,21 +759,7 @@ export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
           <h2>Saved Jobs</h2>
           <span className="subtle">{loading ? "Loading..." : `${tableRows.length} shown of ${jobs.length}`}</span>
         </div>
-        <p className="subtle">
-          This is the clean saved-jobs queue. Open a job detail page for verify, score, packet, apply, autofill, and tracker actions.
-        </p>
-        <div className="job-filter-tabs" aria-label="Saved job filters">
-          {ACTIVE_FILTERS.map((filter) => (
-            <button
-              className={savedFilter === filter.key ? "filter-chip active" : "filter-chip"}
-              type="button"
-              key={filter.key}
-              onClick={() => setSavedFilter(filter.key)}
-            >
-              {filter.label}
-            </button>
-          ))}
-        </div>
+        <p className="subtle">Jobs you saved and have not marked applied yet.</p>
         <div className="filter-row">
           <label className="field-group">
             <span>Search saved jobs</span>
@@ -847,12 +790,17 @@ export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
           >
             Refresh Jobs
           </button>
-          <button className="button secondary" type="button" onClick={handleVerifyAll} disabled={verifyingAll || jobs.length === 0}>
-            {verifyingAll ? "Verifying All Jobs..." : "Verify All Jobs"}
-          </button>
-          <button className="button" type="button" onClick={handleScoreAll} disabled={scoringAll || jobs.length === 0}>
-            {scoringAll ? "Scoring All Jobs..." : "Score All Jobs"}
-          </button>
+          <details className="details-block">
+            <summary>Advanced refresh actions</summary>
+            <div className="button-row">
+              <button className="button secondary" type="button" onClick={handleVerifyAll} disabled={verifyingAll || jobs.length === 0}>
+                {verifyingAll ? "Re-verifying..." : "Re-verify saved jobs"}
+              </button>
+              <button className="button secondary" type="button" onClick={handleScoreAll} disabled={scoringAll || jobs.length === 0}>
+                {scoringAll ? "Re-scoring..." : "Re-score saved jobs"}
+              </button>
+            </div>
+          </details>
         </div>
 
         {verifySummary ? (
@@ -904,8 +852,64 @@ export function JobsManager({ view = "saved" }: { view?: JobsManagerView }) {
 
         {loading ? (
           <p className="subtle">Loading jobs...</p>
+        ) : jobs.length === 0 ? (
+          <p className="subtle">No saved jobs yet. Save jobs from Discover first.</p>
         ) : (
           <JobTable rows={tableRows} onViewDescription={handleViewDescription} />
+        )}
+      </section> : null}
+
+      {view === "applied" ? <section className="panel">
+        <div className="section-title">
+          <h2>Applied Jobs</h2>
+          <span className="subtle">{loading ? "Loading..." : `${tableRows.length} shown of ${jobs.length}`}</span>
+        </div>
+        <p className="subtle">Jobs you manually submitted or moved into an outcome status.</p>
+        <div className="button-row">
+          <label className="checkbox-row">
+            <input type="checkbox" checked={showTestJobs} onChange={(event) => setShowTestJobs(event.target.checked)} />
+            Show test/demo jobs
+          </label>
+        </div>
+        {loading ? (
+          <p className="subtle">Loading applied jobs...</p>
+        ) : tableRows.length === 0 ? (
+          <p className="subtle">No applied jobs yet. After you submit an application manually, mark it applied from Apply.</p>
+        ) : (
+          <div className="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Company</th>
+                  <th>Title</th>
+                  <th>Applied date</th>
+                  <th>Status</th>
+                  <th>Score/Match</th>
+                  <th>Outcome</th>
+                  <th>Notes</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tableRows.map(({ job }) => (
+                  <tr key={job.id}>
+                    <td>{job.company}</td>
+                    <td><strong>{job.title}</strong></td>
+                    <td>{job.applied_at ? new Date(job.applied_at).toLocaleDateString() : "-"}</td>
+                    <td><span className={`status-tag status-${job.application_status.replace(/_/g, "-")}`}>{formatDisplayStatus(job.application_status)}</span></td>
+                    <td>{job.overall_priority_score.toFixed(1)} / {job.resume_match_score.toFixed(1)}</td>
+                    <td>{outcomeForJob(job)}</td>
+                    <td>{job.user_notes ? job.user_notes.slice(0, 120) : "-"}</td>
+                    <td>
+                      <Link href={`/jobs/${job.id}`} className="button secondary compact">
+                        View Details
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section> : null}
     </div>

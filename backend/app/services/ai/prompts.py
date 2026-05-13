@@ -20,19 +20,6 @@ def _shared_safety_rules() -> str:
     )
 
 
-def build_job_parse_prompt(job_text: str) -> str:
-    return "\n\n".join(
-        [
-            "Parse the following job description into structured JSON.",
-            _shared_safety_rules(),
-            "Return keys: company, title, location, employment_type, remote_status, role_category, seniority_level, years_experience_min, years_experience_max, salary_min, salary_max, salary_currency, required_skills, preferred_skills, responsibilities, requirements, education_requirements, application_questions.",
-            "Use null, empty strings, or empty arrays when the data is not clearly present.",
-            "Job text:",
-            job_text,
-        ]
-    )
-
-
 def build_resume_tailor_prompt(
     base_resume_tex: str,
     job: Any,
@@ -41,10 +28,14 @@ def build_resume_tailor_prompt(
 ) -> str:
     return "\n\n".join(
         [
-            "Suggest conservative content-only resume tailoring ideas for the provided job.",
+            "Tailor the provided LaTeX resume source for the provided job.",
             _shared_safety_rules(),
-            "Do not redesign the resume. Preserve the LaTeX structure, commands, spacing, fonts, margins, and section order.",
-            "Return short bullet suggestions only. Focus on truthful emphasis and skill ordering, not template replacement.",
+            "Return ONLY the complete updated LaTeX source, starting with \\documentclass and ending with \\end{document}.",
+            "Do not wrap the answer in Markdown fences or include explanation outside the LaTeX source.",
+            "Preserve the existing LaTeX structure, commands, spacing, fonts, margins, and section order.",
+            "Do not add new employers, schools, dates, titles, credentials, work authorization, demographics, or unsupported metrics.",
+            "Prefer conservative edits: reorder/emphasize existing skills, tune existing bullet wording, and keep all claims grounded in the source resume/profile.",
+            "If the resume cannot be safely tailored, return the original LaTeX source unchanged with a short LaTeX comment explaining that manual review is needed.",
             "Job:",
             _safe_json(
                 {
@@ -133,19 +124,5 @@ def build_application_questions_prompt(job: Any, profile: dict[str, Any], scorin
             _safe_json(profile),
             "Scoring evidence:",
             _safe_json(scoring_evidence or {}),
-        ]
-    )
-
-
-def build_market_insights_prompt(market_data: dict[str, Any]) -> str:
-    return "\n\n".join(
-        [
-            "Summarize the user's observed job-market and application trends.",
-            _shared_safety_rules(),
-            "Do not claim prediction, causation, or 'best time to apply'. Use only observed historical data.",
-            "If the sample size is small, say so explicitly.",
-            "Return 3 to 6 short actionable insights.",
-            "Market dashboard data:",
-            _safe_json(market_data),
         ]
     )

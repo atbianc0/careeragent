@@ -24,14 +24,6 @@ export default async function ProfilePage({
 
   return (
     <div className="page">
-      <section className="hero">
-        <span className="eyebrow">Profile</span>
-        <h1>Profile</h1>
-        <p className="hero-copy">
-          Manage the profile, resume, application defaults, and writing style CareerAgent uses for job matching and packets.
-        </p>
-      </section>
-
       <nav className="tab-nav" aria-label="Profile tabs">
         {tabs.map((tab) => (
           <Link className={activeTab === tab.key ? "tab-link active" : "tab-link"} href={tabHref(tab.key)} key={tab.key}>

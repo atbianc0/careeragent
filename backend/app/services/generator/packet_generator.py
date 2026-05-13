@@ -18,6 +18,8 @@ from app.services.ai import (
     build_resume_tailor_prompt,
     check_no_unsupported_claims,
     get_ai_provider,
+    require_ai_allowed,
+    sanitize_ai_output,
 )
 from app.services.profile.profile_store import load_profile_document
 from app.services.resume import compile_latex_file, generate_tailored_resume_source, load_resume_document
@@ -31,6 +33,13 @@ from .recruiter_message import generate_recruiter_message
 
 DEFAULT_GENERATION_MODE = "deterministic_mock"
 SUCCESS_STATUSES = {"completed", "completed_with_warnings"}
+PACKET_AI_ACTIONS = {
+    "resume": "tailor_resume",
+    "cover_letter": "draft_cover_letter",
+    "recruiter_message": "draft_recruiter_message",
+    "answers": "draft_application_answer",
+    "application_questions": "draft_application_answer",
+}
 
 
 def _relative_path(path: Path) -> str:
@@ -103,6 +112,64 @@ def _unique_strings(values: list[str]) -> list[str]:
         seen.add(cleaned)
         unique.append(cleaned)
     return unique
+
+
+def _clean_ai_resume_source(raw_content: str) -> str:
+    cleaned = sanitize_ai_output(raw_content)
+    document_start = cleaned.find("\\documentclass")
+    if document_start > 0:
+        cleaned = cleaned[document_start:]
+    document_end = cleaned.rfind("\\end{document}")
+    if document_end != -1:
+        cleaned = cleaned[: document_end + len("\\end{document}")]
+    return cleaned.strip()
+
+
+def _is_valid_latex_resume_source(candidate: str, base_resume_tex: str) -> tuple[bool, str]:
+    cleaned = candidate.strip()
+    required_markers = ["\\documentclass", "\\begin{document}", "\\end{document}"]
+    missing = [marker for marker in required_markers if marker not in cleaned]
+    if missing:
+        return False, f"AI resume output was missing required LaTeX markers: {', '.join(missing)}."
+    if cleaned.startswith("```") or "```" in cleaned:
+        return False, "AI resume output still contained Markdown code fences."
+
+    base_length = max(len(base_resume_tex.strip()), 1)
+    candidate_length = len(cleaned)
+    if candidate_length < base_length * 0.45:
+        return False, "AI resume output was much shorter than the source resume."
+    if candidate_length > base_length * 1.9:
+        return False, "AI resume output was much longer than the source resume."
+
+    return True, "AI resume output looked like a complete LaTeX document."
+
+
+def _apply_ai_resume_source(
+    *,
+    tailoring_result: dict[str, Any],
+    ai_content: str,
+    provider_name: str,
+    base_resume_tex: str,
+) -> tuple[dict[str, Any], bool, str]:
+    candidate = _clean_ai_resume_source(ai_content)
+    valid, reason = _is_valid_latex_resume_source(candidate, base_resume_tex)
+    if not valid:
+        return tailoring_result, False, reason
+
+    updated = dict(tailoring_result)
+    updated["content"] = candidate
+    updated["changes"] = _unique_strings(
+        list(updated.get("changes") or [])
+        + [f"Applied {provider_name} resume tailoring to the LaTeX source after structure and safety validation."]
+    )
+    updated["safety_notes"] = _unique_strings(
+        list(updated.get("safety_notes") or [])
+        + [
+            "AI-tailored LaTeX source was accepted only after complete-document validation.",
+            "Review the tailored resume PDF before using it.",
+        ]
+    )
+    return updated, True, reason
 
 
 def _apply_ai_draft(
@@ -213,6 +280,8 @@ def _packet_metadata_payload(
     ai_provider_name: str | None,
     ai_warnings: list[str],
     use_ai: bool,
+    api_used: bool,
+    ai_tasks: list[str],
 ) -> dict[str, Any]:
     compile_success = bool((compile_resume_pdf_result or {}).get("success"))
     compile_message = str((compile_resume_pdf_result or {}).get("message") or "")
@@ -231,6 +300,9 @@ def _packet_metadata_payload(
         "generation_mode": generation_mode,
         "ai_requested": use_ai,
         "ai_provider": ai_provider_name,
+        "api_used": api_used,
+        "provider": ai_provider_name,
+        "ai_tasks": ai_tasks,
         "ai_warnings": ai_warnings,
         "safety_notes": safety_notes,
     }
@@ -248,13 +320,34 @@ def generate_application_packet(db: Session, job_id: int, options: dict[str, Any
     source_resume_path = str(resume_document.get("path") or "")
     scoring_evidence = dict(job.scoring_evidence or {}) or None
     use_ai = bool(options.get("use_ai", False))
-    provider = get_ai_provider(options.get("provider"))
+    user_triggered = bool(options.get("user_triggered", False))
+    requested_ai_tasks = {str(task).strip() for task in list(options.get("ai_tasks") or []) if str(task).strip()}
+    if use_ai and not requested_ai_tasks:
+        requested_ai_tasks = {"resume", "cover_letter", "recruiter_message", "answers"}
+    provider = get_ai_provider()
     ai_provider_name = provider.name if use_ai else None
     generation_mode = DEFAULT_GENERATION_MODE
     ai_warnings: list[str] = []
     ai_safety_notes: list[str] = []
     ai_tailoring_notes: list[str] = []
-    if use_ai and provider.is_available():
+    allowed_ai_actions: set[str] = set()
+    api_used = False
+    if use_ai:
+        for task_name in sorted(requested_ai_tasks):
+            action = PACKET_AI_ACTIONS.get(task_name)
+            if not action:
+                ai_warnings.append(f"AI task '{task_name}' is not allowed for packet generation.")
+                continue
+            guard = require_ai_allowed(
+                action=action,
+                user_enabled=True,
+                user_triggered=user_triggered,
+            )
+            if guard.get("allowed"):
+                allowed_ai_actions.add(action)
+            else:
+                ai_warnings.append(str(guard.get("message") or f"{action} blocked by API policy."))
+    if use_ai and allowed_ai_actions and provider.is_available():
         generation_mode = f"ai_{provider.name}"
     elif use_ai and not provider.is_available():
         ai_warnings.append(provider.unavailable_reason or f"{provider.name} provider is unavailable. Falling back to deterministic generation.")
@@ -299,8 +392,11 @@ def generate_application_packet(db: Session, job_id: int, options: dict[str, Any
         job_summary_path = _write_json(packet_dir / "job_summary.json", _job_summary_payload(job, generated_at))
         files_created.append(job_summary_path)
 
-        tailoring_result = generate_tailored_resume_source(base_resume_tex, job, profile, scoring_evidence)
-        if use_ai and provider.is_available():
+        deterministic_tailoring_result = generate_tailored_resume_source(base_resume_tex, job, profile, scoring_evidence)
+        tailoring_result = dict(deterministic_tailoring_result)
+        ai_tailored_resume_source_used = False
+        ai_tailored_resume_reverted = False
+        if "tailor_resume" in allowed_ai_actions and provider.is_available():
             resume_ai_result = provider.generate_text(
                 "resume_tailor",
                 build_resume_tailor_prompt(base_resume_tex, job, profile, scoring_evidence),
@@ -308,17 +404,36 @@ def generate_application_packet(db: Session, job_id: int, options: dict[str, Any
                     "job": _job_context(job),
                     "profile": profile,
                     "scoring_evidence": scoring_evidence or {},
+                    "base_resume_tex": base_resume_tex,
+                    "api_action": "tailor_resume",
+                    "user_enabled": True,
+                    "user_triggered": user_triggered,
                 },
             )
+            api_used = api_used or bool((resume_ai_result.get("raw") or {}).get("api_used"))
             ai_warnings.extend(list(resume_ai_result.get("warnings") or []))
             if resume_ai_result.get("success"):
-                resume_safety = check_no_unsupported_claims(str(resume_ai_result.get("content") or ""), profile, base_resume_tex)
+                raw_resume_ai_content = str(resume_ai_result.get("content") or "")
+                resume_safety = check_no_unsupported_claims(raw_resume_ai_content, profile, base_resume_tex)
                 ai_safety_notes.extend(list(resume_safety.get("safety_notes") or []))
                 ai_warnings.extend(list(resume_safety.get("warnings") or []))
                 if resume_safety.get("safe"):
-                    ai_tailoring_notes.extend(_extract_bullets(str(resume_safety.get("content") or "")))
+                    tailoring_result, ai_tailored_resume_source_used, ai_resume_reason = _apply_ai_resume_source(
+                        tailoring_result=tailoring_result,
+                        ai_content=raw_resume_ai_content,
+                        provider_name=provider.name,
+                        base_resume_tex=base_resume_tex,
+                    )
+                    if ai_tailored_resume_source_used:
+                        ai_tailoring_notes.append(ai_resume_reason)
+                    else:
+                        ai_warnings.append(
+                            f"{provider.name} resume tailoring did not return usable LaTeX source. {ai_resume_reason} "
+                            "Fell back to deterministic tailoring."
+                        )
+                        ai_tailoring_notes.extend(_extract_bullets(raw_resume_ai_content))
                 else:
-                    ai_warnings.append("AI resume tailoring advisory notes were skipped because safety checks found unsupported-claim risk.")
+                    ai_warnings.append("AI resume tailoring output was skipped because safety checks found unsupported-claim risk.")
         tailored_resume_tex_path = _write_text(packet_dir / "tailored_resume.tex", str(tailoring_result["content"]))
         files_created.append(tailored_resume_tex_path)
 
@@ -329,22 +444,44 @@ def generate_application_packet(db: Session, job_id: int, options: dict[str, Any
                 tailored_resume_pdf_path = str(compile_result.get("output_path") or "")
                 if tailored_resume_pdf_path:
                     files_created.append(tailored_resume_pdf_path)
+            elif ai_tailored_resume_source_used:
+                ai_tailored_resume_reverted = True
+                ai_warnings.append(
+                    "AI-tailored resume source failed LaTeX compilation, so CareerAgent reverted to deterministic tailoring and tried again."
+                )
+                tailoring_result = dict(deterministic_tailoring_result)
+                tailored_resume_tex_path = _write_text(packet_dir / "tailored_resume.tex", str(tailoring_result["content"]))
+                compile_result = compile_latex_file(packet_dir / "tailored_resume.tex", packet_dir, "tailored_resume")
+                if compile_result.get("success"):
+                    tailored_resume_pdf_path = str(compile_result.get("output_path") or "")
+                    if tailored_resume_pdf_path and tailored_resume_pdf_path not in files_created:
+                        files_created.append(tailored_resume_pdf_path)
+                else:
+                    generation_error = str(compile_result.get("message") or "Tailored resume PDF compilation was not available.")
             else:
                 generation_error = str(compile_result.get("message") or "Tailored resume PDF compilation was not available.")
 
         cover_letter_path: str | None = None
         if bool(options.get("include_cover_letter", True)):
             cover_letter_content = generate_cover_letter(job, profile, base_resume_tex, scoring_evidence)
-            if use_ai and provider.is_available():
+            if "draft_cover_letter" in allowed_ai_actions and provider.is_available():
                 cover_letter_result = _apply_ai_draft(
                     task="cover_letter",
                     provider=provider,
                     prompt=build_cover_letter_prompt(job, profile, base_resume_tex, scoring_evidence),
-                    context={"job": _job_context(job), "profile": profile, "scoring_evidence": scoring_evidence or {}},
+                    context={
+                        "job": _job_context(job),
+                        "profile": profile,
+                        "scoring_evidence": scoring_evidence or {},
+                        "api_action": "draft_cover_letter",
+                        "user_enabled": True,
+                        "user_triggered": user_triggered,
+                    },
                     profile=profile,
                     resume_text=base_resume_tex,
                     fallback_content=cover_letter_content,
                 )
+                api_used = api_used or bool(cover_letter_result.get("used_ai") and provider.name in {"openai", "gemini"})
                 cover_letter_content = cover_letter_result["content"]
                 ai_warnings.extend(list(cover_letter_result.get("warnings") or []))
                 ai_safety_notes.extend(list(cover_letter_result.get("safety_notes") or []))
@@ -354,16 +491,24 @@ def generate_application_packet(db: Session, job_id: int, options: dict[str, Any
         recruiter_message_path: str | None = None
         if bool(options.get("include_recruiter_message", True)):
             recruiter_message_content = generate_recruiter_message(job, profile, scoring_evidence)
-            if use_ai and provider.is_available():
+            if "draft_recruiter_message" in allowed_ai_actions and provider.is_available():
                 recruiter_result = _apply_ai_draft(
                     task="recruiter_message",
                     provider=provider,
                     prompt=build_recruiter_message_prompt(job, profile, scoring_evidence),
-                    context={"job": _job_context(job), "profile": profile, "scoring_evidence": scoring_evidence or {}},
+                    context={
+                        "job": _job_context(job),
+                        "profile": profile,
+                        "scoring_evidence": scoring_evidence or {},
+                        "api_action": "draft_recruiter_message",
+                        "user_enabled": True,
+                        "user_triggered": user_triggered,
+                    },
                     profile=profile,
                     resume_text=base_resume_tex,
                     fallback_content=recruiter_message_content,
                 )
+                api_used = api_used or bool(recruiter_result.get("used_ai") and provider.name in {"openai", "gemini"})
                 recruiter_message_content = recruiter_result["content"]
                 ai_warnings.extend(list(recruiter_result.get("warnings") or []))
                 ai_safety_notes.extend(list(recruiter_result.get("safety_notes") or []))
@@ -373,16 +518,24 @@ def generate_application_packet(db: Session, job_id: int, options: dict[str, Any
         application_questions_path: str | None = None
         if bool(options.get("include_application_questions", True)):
             application_questions_content = generate_application_question_answers(job, profile, scoring_evidence)
-            if use_ai and provider.is_available():
+            if "draft_application_answer" in allowed_ai_actions and provider.is_available():
                 question_result = _apply_ai_draft(
                     task="application_questions",
                     provider=provider,
                     prompt=build_application_questions_prompt(job, profile, scoring_evidence),
-                    context={"job": _job_context(job), "profile": profile, "scoring_evidence": scoring_evidence or {}},
+                    context={
+                        "job": _job_context(job),
+                        "profile": profile,
+                        "scoring_evidence": scoring_evidence or {},
+                        "api_action": "draft_application_answer",
+                        "user_enabled": True,
+                        "user_triggered": user_triggered,
+                    },
                     profile=profile,
                     resume_text=base_resume_tex,
                     fallback_content=application_questions_content,
                 )
+                api_used = api_used or bool(question_result.get("used_ai") and provider.name in {"openai", "gemini"})
                 application_questions_content = question_result["content"]
                 ai_warnings.extend(list(question_result.get("warnings") or []))
                 ai_safety_notes.extend(list(question_result.get("safety_notes") or []))
@@ -439,7 +592,11 @@ def generate_application_packet(db: Session, job_id: int, options: dict[str, Any
             ai_provider_name=ai_provider_name,
             ai_warnings=ai_warnings,
             use_ai=use_ai,
+            api_used=api_used,
+            ai_tasks=sorted(allowed_ai_actions),
         )
+        metadata_payload["ai_tailored_resume_source_used"] = ai_tailored_resume_source_used and not ai_tailored_resume_reverted
+        metadata_payload["ai_tailored_resume_reverted"] = ai_tailored_resume_reverted
         packet_metadata_path = _write_json(packet_dir / "packet_metadata.json", metadata_payload)
         files_created.append(packet_metadata_path)
         packet.packet_metadata_path = packet_metadata_path

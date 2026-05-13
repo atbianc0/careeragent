@@ -44,7 +44,8 @@ class ApplicationPacketGenerateRequest(BaseModel):
     include_application_questions: bool = True
     compile_resume_pdf: bool = True
     use_ai: bool = False
-    provider: str = "mock"
+    ai_tasks: list[str] = Field(default_factory=list)
+    user_triggered: bool = True
 
 
 class ApplicationPacketGenerateResponse(BaseModel):

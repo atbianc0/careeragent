@@ -40,7 +40,7 @@ def _build_mock_text(task: str, context: dict[str, Any] | None) -> str:
     skills = _relevant_skills(job, profile)
     skill_sentence = f" Existing materials show overlap in {', '.join(skills[:3])}." if skills else ""
 
-    if task == "cover_letter":
+    if task in {"cover_letter", "draft_cover_letter"}:
         return "\n".join(
             [
                 "# AI Draft Cover Letter",
@@ -57,7 +57,7 @@ def _build_mock_text(task: str, context: dict[str, Any] | None) -> str:
                 signer_name,
             ]
         )
-    if task == "recruiter_message":
+    if task in {"recruiter_message", "draft_recruiter_message"}:
         return "\n".join(
             [
                 "# AI Draft Recruiter Message",
@@ -70,7 +70,7 @@ def _build_mock_text(task: str, context: dict[str, Any] | None) -> str:
                 signer_name,
             ]
         )
-    if task == "application_questions":
+    if task in {"application_questions", "draft_application_answer"}:
         return "\n".join(
             [
                 "# AI Draft Application Answers",
@@ -84,20 +84,17 @@ def _build_mock_text(task: str, context: dict[str, Any] | None) -> str:
                 "- REVIEW MANUALLY. Keep this grounded in your real resume and profile.",
             ]
         )
-    if task == "market_insights":
-        dashboard = dict((context or {}).get("market_data") or {})
-        pipeline = dict(dashboard.get("pipeline_summary") or {})
-        total_jobs = int(pipeline.get("total_jobs") or 0)
-        applied_jobs = int(pipeline.get("applied_jobs") or 0)
-        return "\n".join(
-            [
-                "MockProvider market insight draft:",
-                f"- You currently have {total_jobs} saved jobs in CareerAgent.",
-                f"- You have marked {applied_jobs} jobs as applied so far.",
-                "- Treat this as a draft summary of stored data, not a prediction.",
-            ]
-        )
-    if task == "resume_tailor":
+    if task in {"resume_tailor", "tailor_resume"}:
+        base_resume_tex = str((context or {}).get("base_resume_tex") or "").strip()
+        if "\\begin{document}" in base_resume_tex:
+            tailoring_comment = "\n".join(
+                [
+                    "% MockProvider AI-assisted resume tailoring:",
+                    f"% Target role: {title} at {company}.",
+                    "% Review manually before using.",
+                ]
+            )
+            return base_resume_tex.replace("\\begin{document}", tailoring_comment + "\n\n\\begin{document}", 1)
         return "\n".join(
             [
                 "MockProvider resume tailoring suggestions:",

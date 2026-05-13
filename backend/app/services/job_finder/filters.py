@@ -25,9 +25,17 @@ ADJACENT_ROLE_CATEGORIES = {
 }
 ADVANCED_LEVELS = {"advanced_senior", "senior"}
 ENTRY_LEVELS = {"intern", "internship", "new_grad_entry", "early_career"}
-LOCATION_MATCHES = {"bay_area", "remote_us", "hybrid_bay_area"}
+LOCATION_MATCHES = {"bay_area", "remote_us"}
 MATCH_MODES = {"strict", "balanced", "broad"}
 DEFAULT_TARGET_EXPERIENCE_LEVELS = {"new_grad_entry", "early_career", "unknown"}
+DEFAULT_LOCATION_FILTER = {
+    "allow_bay_area": True,
+    "allow_remote_us": True,
+    "allow_unknown": True,
+    "allow_non_bay_area_california": False,
+    "allow_other_us": False,
+    "allow_international": False,
+}
 DEFAULT_DEGREE_FILTER = {
     "allow_no_degree": True,
     "allow_bachelors": True,
@@ -139,6 +147,40 @@ def _excluded_experience_levels(search_profile: dict[str, Any]) -> set[str]:
 def _degree_filter(search_profile: dict[str, Any]) -> dict[str, bool]:
     configured = dict(search_profile.get("degree_filter") or {})
     return {**DEFAULT_DEGREE_FILTER, **{key: bool(value) for key, value in configured.items()}}
+
+
+def _location_filter(search_profile: dict[str, Any]) -> dict[str, bool]:
+    configured = dict(search_profile.get("location_filter") or {})
+    merged = {**DEFAULT_LOCATION_FILTER, **{key: bool(value) for key, value in configured.items()}}
+    if bool(search_profile.get("allow_unknown_location", True)):
+        merged["allow_unknown"] = True
+    return merged
+
+
+def _location_allowed(location_fit: str, search_profile: dict[str, Any]) -> bool:
+    config = _location_filter(search_profile)
+    return {
+        "bay_area": config["allow_bay_area"],
+        "remote_us": config["allow_remote_us"],
+        "unknown": config["allow_unknown"],
+        "non_bay_area_california": config["allow_non_bay_area_california"],
+        "other_us": config["allow_other_us"],
+        "international": config["allow_international"],
+    }.get(location_fit, config["allow_unknown"])
+
+
+def _location_near_allowed(location_fit: str, match_mode: str, search_profile: dict[str, Any], strong_role: bool) -> bool:
+    if _location_allowed(location_fit, search_profile):
+        return True
+    if location_fit == "international":
+        return False
+    if match_mode == "strict":
+        return False
+    if match_mode == "balanced":
+        return strong_role and bool(search_profile.get("include_near_matches", True))
+    if match_mode == "broad":
+        return True
+    return False
 
 
 def _role_confidence(candidate: dict[str, Any]) -> float:
@@ -341,8 +383,12 @@ def build_candidate_match_reasons(candidate: dict[str, Any], search_profile: dic
         reasons.append(str(location_reasons[0]))
     elif location_fit == "unknown":
         reasons.append("Location is missing, so CareerAgent cannot confirm Bay Area fit.")
-    elif location_fit == "outside_target":
-        reasons.append("Location is outside the target area.")
+    elif location_fit == "non_bay_area_california":
+        reasons.append("Location is non-Bay Area California.")
+    elif location_fit == "other_us":
+        reasons.append("Location is Other US.")
+    elif location_fit == "international":
+        reasons.append("Location is international.")
 
     experience_level = candidate.get("experience_level") or level.get("experience_level") or "unknown"
     level_reasons = list(level.get("reasons") or [])
@@ -484,7 +530,7 @@ def filter_candidate(candidate: dict[str, Any], search_profile: dict[str, Any], 
         score += 18
     if location_fit in LOCATION_MATCHES:
         score += 25
-    elif location_fit == "outside_target":
+    elif location_fit in {"non_bay_area_california", "other_us", "international"}:
         score -= 8 if match_mode in {"balanced", "broad"} else 25
     elif location_fit == "unknown":
         score += 3 if match_mode == "broad" else -2 if match_mode == "balanced" else -10
@@ -553,17 +599,19 @@ def filter_candidate(candidate: dict[str, Any], search_profile: dict[str, Any], 
             would_show_in_broad=True,
         )
 
-    if location_fit == "outside_target":
-        if match_mode == "strict":
+    location_allowed = _location_allowed(location_fit, search_profile)
+    location_near_allowed = _location_near_allowed(location_fit, match_mode, search_profile, strong_role)
+    if not location_allowed:
+        if not location_near_allowed:
             return _result(
                 "excluded",
                 score,
-                reasons + ["Excluded: location is outside target area."],
+                reasons + [f"Excluded: outside selected location filter: {candidate.get('location') or 'Unknown location'}."],
                 primary_exclusion_category="location",
-                hard_excluded=False,
-                would_show_in_broad=related_role or adjacent_role,
+                hard_excluded=location_fit == "international",
+                would_show_in_broad=location_fit != "international",
             )
-        reasons.append("Location is outside the target area, shown as a near match for review.")
+        reasons.append(f"Outside selected location filter: {candidate.get('location') or 'Unknown location'}, shown as a near match for review.")
 
     if match_mode == "balanced" and not related_role:
         return _result(

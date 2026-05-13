@@ -17,11 +17,27 @@ CareerAgent must never click final submit, apply, confirm, or equivalent end-sta
 
 CareerAgent must never invent experience, skills, credentials, companies, dates, results, education, or work authorization details.
 
+<<<<<<< HEAD
 ## Project Map
 
 For a full file-by-file overview of the app structure, routes, backend services, models, and workflows, see:
 
 [PROJECT_MAP.md](./PROJECT_MAP.md)
+=======
+## Product Workflow
+
+1. Fill Profile.
+2. Discover Jobs.
+3. Save good jobs.
+4. CareerAgent auto-verifies and scores saved jobs.
+5. Go to Apply.
+6. Choose AI-assisted apply or Basic Autofill.
+7. Review everything and manually submit on the employer site.
+8. Mark Applied.
+9. Track outcomes in Insights.
+
+AI assistance is optional and only runs after an explicit AI-assisted apply click. CareerAgent never submits applications. Follow-ups are hidden from the main workflow for now, Tracker lives in Insights, and the job detail page is secondary/advanced only.
+>>>>>>> 1b90ff4 (Update UI and add AI autofill flow)
 
 ## Current Stage
 
@@ -40,13 +56,13 @@ For a full file-by-file overview of the app structure, routes, backend services,
 - Stage 11: Complete
 - Stage 12: Initial implementation
 
-Stage 12 adds a safe, source-based Job Finder that imports a saved ATS/company source database, discovers reviewable candidates from known boards and company career pages, deduplicates/filters them, and lets the user import selected candidates into the existing Jobs workflow.
+Stage 12 adds a safe, source-based Job Finder that imports a saved ATS/company source database, discovers reviewable candidates from known boards and company career pages, deduplicates/filters them, and lets the user save selected candidates into the Jobs -> Apply workflow. Saving a job automatically runs verification and scoring.
 
 ## Features Through Stage 12
 
 - Generate a private per-job packet folder under `outputs/application_packets/`.
-- Generate `tailored_resume.tex` by minimally editing the source LaTeX resume while preserving structure and style.
-- Attempt `tailored_resume.pdf` compilation when `xelatex` or `pdflatex` is available.
+- Generate `tailored_resume.tex` by minimally editing the source LaTeX resume while preserving structure and style; AI-assisted apply can use the selected provider to return a complete validated LaTeX resume source.
+- Attempt `tailored_resume.pdf` compilation with `xelatex` and `pdflatex`, falling back from the local backend to the Docker backend image when the host has no TeX install.
 - Generate `cover_letter.md`.
 - Generate `recruiter_message.md`.
 - Generate `application_questions.md`.
@@ -55,15 +71,15 @@ Stage 12 adds a safe, source-based Job Finder that imports a saved ATS/company s
 - Generate `job_summary.json`.
 - Generate `packet_metadata.json`.
 - Save packet records in PostgreSQL with generation status, timestamps, file paths, and graceful error details.
-- Show packets in the frontend on `/packets`, `/packets/{id}`, and the job detail page.
-- Track application statuses such as `saved`, `packet_ready`, `application_opened`, `applied_manual`, `follow_up`, `interview`, `rejected`, `offer`, `withdrawn`, and `closed_before_apply`.
+- Show packets from Apply and the advanced packet library on `/packets` and `/packets/{id}`.
+- Track application statuses such as saved, ready to apply, applying, applied, interview, rejected, offer, withdrawn, and closed before apply. Internal legacy statuses are mapped to these simpler user-facing labels.
 - Log application events with timestamps, notes, and optional status transitions.
 - Track when a packet is generated or viewed.
 - Track when an application link is opened through CareerAgent.
 - Let the user manually mark jobs as applied, interview, rejected, offer, withdrawn, or closed before applying.
-- Let the user add notes and follow-up reminders to job records.
-- Show a real Tracker page with grouped statuses, summary cards, upcoming follow-ups, and recent activity.
-- Show per-job timeline history on the job detail page.
+- Let the user add notes and maintain existing follow-up data through legacy/internal paths, while follow-ups are hidden from the primary workflow for now.
+- Show tracker/status summaries, outcome counts, and recent activity in `/insights`.
+- Keep the job detail page secondary and simple, with raw evidence collapsed under Advanced details.
 - Update dashboard stats from tracker data.
 - Open applications in the user's normal browser with tracker logging and no autofill.
 - Launch Chromium with Playwright in headless Docker mode or headed local mode when a display is available.
@@ -84,14 +100,13 @@ Stage 12 adds a safe, source-based Job Finder that imports a saved ATS/company s
 - Flag stale and likely closed jobs with conservative recommendations such as reverify, deprioritize, or mark closed before apply.
 - Generate rule-based insights without pretending to predict future performance.
 - Export safe job and application metadata to JSON or CSV without including private profile, resume, or packet contents.
-- Add an AI provider abstraction with MockProvider, OpenAIProvider, and a LocalLLMProvider placeholder.
+- Add an AI provider abstraction with MockProvider by default and optional OpenAIProvider or GeminiProvider.
 - Keep MockProvider available with no API key so the app remains fully testable and usable offline from external AI services.
 - Add an AI status endpoint and provider test endpoint without exposing secrets.
-- Allow optional AI job parsing while keeping rule-based parsing as the default fallback.
-- Allow optional AI packet drafting for cover letters, recruiter messages, application questions, and conservative resume-tailoring advisory notes.
-- Allow optional AI market insight summaries while preserving the Stage 9 rule-based insight path.
-- Run review-required safety checks on AI-generated content before it is used in packets or insight summaries.
-- Keep all AI usage optional and never require an API key for the app to start or function.
+- Keep job parsing, matching, scoring, verification, insights, predictions, saved-source search, autofill, and applying local/rule-based with no external AI/API dependency.
+- Allow optional selected-provider AI writing assistance for validated tailored resume source, cover letters, recruiter messages, application question drafts, and one-time Job Finder search keyword generation only after explicit user action and policy checks.
+- Run review-required safety checks on AI-generated packet content before it is used.
+- Keep all external API usage optional, disabled by default, and never required for the app to start or function.
 - Estimate predicted application priority from existing priority scores, source quality, role quality, response likelihood, close risk, packet readiness, stale signals, and application status.
 - Estimate close risk with conservative labels such as low, medium, high, closed, or unknown.
 - Estimate response likelihood from stored applied-job outcomes when enough history exists, and warn when history is too small.
@@ -141,7 +156,6 @@ Stage 12 adds a safe, source-based Job Finder that imports a saved ATS/company s
 - The source database can be expanded over time by rerunning the discovery script.
 - LinkedIn and Indeed are manual pasted links only.
 - Workday pages are often JavaScript-heavy and may return partial URL-inferred candidates.
-- Google/web search is a placeholder until a safe API provider is configured.
 - Some company pages block requests or require browser rendering.
 - Users should review candidates before importing.
 
@@ -197,7 +211,7 @@ CareerAgent is being built toward a custom AI agent workflow, not just a set of 
 10. The user manually reviews and submits.
 11. CareerAgent tracks the application and follow-up status.
 12. CareerAgent summarizes job-market and personal application trends so the user can decide where and when to apply next.
-13. CareerAgent uses optional AI providers to improve parsing, tailoring, application drafts, and insights while keeping everything reviewable and safe.
+13. CareerAgent uses optional, explicit AI assists only for writing drafts, validated resume tailoring, and one-time Job Finder keyword generation.
 14. CareerAgent uses collected history to improve recommendations and make cautious predictions.
 
 At the end of this Stage 11 pass, setup, import, parsing, saved-job persistence, rule-based verification, rule-based scoring, packet generation, tracker logging, manual application status updates, follow-up tracking, autofill previews, safe browser autofill, market analytics dashboards, optional AI provider integration, and cautious prediction estimates are implemented. Final submission is still always manual.
@@ -210,7 +224,7 @@ At the end of this Stage 11 pass, setup, import, parsing, saved-job persistence,
 - Local development: Docker Compose
 - Browser automation: Playwright
 - Resume generation: LaTeX
-- AI integration: MockProvider by default, optional OpenAIProvider, and a LocalLLMProvider placeholder
+- AI integration: one selected provider at a time with `mock` by default, optional OpenAI, or optional Gemini
 
 ## How To Run Locally
 
@@ -220,15 +234,28 @@ At the end of this Stage 11 pass, setup, import, parsing, saved-job persistence,
 cp .env.example .env
 ```
 
-2. Optional: configure AI in your private `.env` if you want OpenAI instead of MockProvider:
+2. Optional: configure AI assists in your private `.env` only if you want explicit OpenAI or Gemini writing/query help:
 
 ```bash
-AI_PROVIDER=openai
-OPENAI_API_KEY=your_key_here
-OPENAI_MODEL=your_model_here
+AI_PROVIDER=mock
+AI_ALLOW_EXTERNAL_CALLS=false
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4o-mini
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
 If you skip this, CareerAgent uses `AI_PROVIDER=mock` and still works normally with no API key.
+
+## AI Provider Policy
+
+Core CareerAgent works without external AI calls. `AI_PROVIDER` controls the single active provider: `mock`, `openai`, or `gemini`. External AI calls are disabled by default with `AI_ALLOW_EXTERNAL_CALLS=false`.
+
+OpenAI and Gemini are alternatives, not simultaneous providers. Only the selected provider is used, even if both keys exist. `mock` never makes paid external calls.
+
+AI is allowed only for validated tailored resume source, cover letters, recruiter messages, long application answer drafts, and one-time Job Finder keyword generation after an explicit user click. CareerAgent does not use AI for job URL parsing, core matching, scoring, verification, insights, source discovery, saved-source search, autofill, or applying. It does not scrape search engine HTML, LinkedIn, or Indeed automatically.
+
+To allow paid OpenAI calls, set `AI_PROVIDER=openai`, `AI_ALLOW_EXTERNAL_CALLS=true`, configure `OPENAI_API_KEY`, and explicitly trigger an allowed writing/query action in the UI. To allow Gemini calls, set `AI_PROVIDER=gemini`, `AI_ALLOW_EXTERNAL_CALLS=true`, configure `GEMINI_API_KEY`, and explicitly trigger an allowed writing/query action in the UI.
 
 3. Optional: if you want demo/sample jobs in an empty local database, set this in `.env`:
 
@@ -276,13 +303,21 @@ If Playwright Chromium is not installed yet, install it with:
 python -m playwright install chromium
 ```
 
-Docker defaults autofill to headless Playwright with `PLAYWRIGHT_HEADLESS=true`, because Docker on macOS usually has no X server/display for headed Chromium. CareerAgent still requires manual review and never submits applications.
+Docker Compose starts the CareerAgent frontend, backend, database, Playwright dependencies, and LaTeX tooling. A Docker container on macOS cannot open a normal host Chromium window that you can continue from; visible autofill requires the backend to run locally on your Mac with `PLAYWRIGHT_HEADLESS=false`. CareerAgent still requires manual review and never submits applications.
+
+For normal local use with native Chromium autofill, use the wrapper script:
+
+```bash
+./scripts/docker-up-open.sh
+```
+
+That command starts Postgres and the frontend in Docker, stops the Docker backend if it is running, starts the backend locally on port `8000`, then opens `/apply` in Chromium/Chrome. Keep that terminal open while using the app.
 
 ### LaTeX PDF Compilation
 
 The backend Docker image includes TeX packages for `xelatex` and `pdflatex`, including common resume packages such as `geometry`, `enumitem`, `hyperref`, `titlesec`, and `parskip`, plus recommended TeX fonts used by hyperlink/font packages. The first Docker build may take longer and the backend image will be larger because TeX Live is substantial.
 
-After rebuilding with `docker compose up --build`, `Compile PDF` on `/resume` should work inside Docker when the LaTeX source is valid. Generated PDFs are written under `outputs/resume/` or packet output folders, which are gitignored.
+After rebuilding with `docker compose up --build`, `Compile PDF` on `/resume` should work inside Docker when the LaTeX source is valid. If you use the visible local backend helper for native Chromium and your Mac does not have TeX installed, CareerAgent delegates PDF compilation to the Docker backend image. Generated PDFs are written under `outputs/resume/` or packet output folders, which are gitignored.
 
 If you want a lighter backend image, remove the TeX Live packages from `backend/Dockerfile` and use the generated `.tex` output only. CareerAgent keeps the graceful no-compiler fallback and returns a clear JSON message instead of crashing.
 
@@ -301,22 +336,30 @@ There are two user-facing Autofill actions:
    - No autofill runs.
 
 2. `Fill Application`
-   - Requires a visible Playwright browser.
-   - Run the backend locally with `PLAYWRIGHT_HEADLESS=false`.
-   - Fills safe fields and uploads available packet files.
+   - Requires Playwright headed mode from a backend running on the host machine.
+   - Docker on macOS cannot open a normal host Chromium window you can continue from.
+   - In Apply, this is the `Fill Application in Chromium` action.
+   - Used by both AI-assisted apply and Basic Autofill.
+   - Basic Autofill fills factual profile/resume fields only: name, email, phone, location, links, configured work authorization/defaults, and safe resume upload.
+   - AI-assisted apply can also draft and fill long application questions when AI is enabled, policy allows `draft_application_answer`, and the user explicitly clicked AI-assisted apply.
+   - Live long-answer fields are drafted from the exact detected on-page prompt, including Lever-style numbered technical question blocks, instead of reusing generic packet-level application text.
+   - AI-drafted answers are marked as drafts and require review before submission.
+   - EEO, demographic, pronoun, veteran, disability, and other sensitive/optional fields are skipped by default. CareerAgent only selects "Prefer not to answer" / "Decline to self-identify" for sensitive optional dropdowns when the user explicitly enables that behavior and the option exists.
+   - Fills safe fields and uploads available packet/base resume PDFs.
    - Opens a headed Chromium session and leaves it open for manual review.
    - Returns a session id that can be closed from the Autofill page.
    - The user manually submits.
 
 CareerAgent never clicks final submit, apply, confirm, finish, send, or equivalent completion actions.
 
-Docker on macOS usually cannot show headed Chromium because the container has no X server/display. Docker defaults to headless Playwright:
+Docker can run hidden Playwright diagnostics, but native visible autofill needs the backend on your Mac:
 
 ```bash
-PLAYWRIGHT_HEADLESS=true
+cd backend
+PLAYWRIGHT_HEADLESS=false python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-In Docker/headless mode, `Fill Application` returns `visible_browser_required` instead of running hidden autofill. Use `Open in Browser`, or run the backend locally with visible Playwright.
+On `/apply`, `Start Basic Autofill` opens a normal Chromium window only when the active backend is local and visible Playwright is ready. AI-assisted apply uses the same `Fill Application in Chromium` action after packet generation and can fill review-required AI drafts for detected long-answer questions. If AI is disabled, detected long-answer questions are reported with manual-draft guidance and a Settings link.
 
 Headless Diagnostic:
 
@@ -328,43 +371,46 @@ Headless Diagnostic:
 
 If CareerAgent opens a page but detects zero form fields, the result is `no_fields_detected` rather than `autofill_completed`. This often means the URL is a job-detail page, a JavaScript-heavy ATS page, a login/CAPTCHA page, or not the direct application form. Workday pages commonly behave this way; CareerAgent may detect an Apply button or link, but it does not click Workday Apply automatically.
 
-Use `/autofill` -> `Use Local Test Form` to create a fake local application form job at `http://localhost:3000/test-application-form`. This gives you a safe way to prove Playwright field detection, field filling, file warnings, and final-submit blocking without touching a real job application.
+Use `/autofill` -> `Use Local Test Form` to create a fake local application form job at `http://localhost:3000/test-application-form`. For Lever-style long-answer testing, use `http://localhost:3000/test-forms/lever-rd`; it mimics a Baseball Operations R&D Intern form with resume upload, contact fields, technical/statistics textareas, optional EEO fields, future-opportunities consent, and a submit button CareerAgent must never click.
 
-### Visible Fill Application Setup
+### Fill Application Setup
 
-For visible local autofill, keep PostgreSQL and the frontend in Docker, but run the backend outside Docker with a display.
+From the project root:
 
-Terminal 1, from the project root:
+```bash
+docker compose up --build
+```
+
+This starts every service in Docker. It is useful for general app development, but the Docker backend cannot open a native macOS Chromium window.
+
+For full local app startup with native Chromium autofill, use:
+
+```bash
+./scripts/docker-up-open.sh
+```
+
+The script starts only `db` and `frontend` in Docker, runs the backend locally, and opens the app. Plain `docker compose up --build` cannot open a host browser by itself because Compose runs containers, not macOS UI commands.
+
+Manual equivalent:
 
 ```bash
 docker compose stop backend
-docker compose up -d db frontend
-```
-
-Terminal 2, from the project root:
-
-```bash
+docker compose up --build -d db frontend
 cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python -m playwright install chromium
-DATABASE_URL="postgresql://careeragent:careeragent@localhost:5432/careeragent" PLAYWRIGHT_HEADLESS=false python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+PLAYWRIGHT_HEADLESS=false python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-The local backend must use `localhost` in `DATABASE_URL`; `db` is a Docker-only hostname. If you changed `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, or `POSTGRES_PORT` in Compose, update the local `DATABASE_URL` to match those values.
+Then open `/apply`, click `Start Basic Autofill` or `Start AI-assisted apply`, and review the Chromium window plus field results. CareerAgent keeps final submit blocked; you submit manually.
 
-Keep the frontend and database running, open `/autofill`, then click `Fill Application`. Docker on macOS usually cannot show headed Chromium; visible Playwright is best run locally outside Docker. In visible mode, CareerAgent starts a headed Chromium session, fills safe fields, returns `visible_session_started` with a `session_id`, and keeps the browser open until you close the session from the Autofill page or run session cleanup. `PLAYWRIGHT_KEEP_OPEN_SECONDS` (default `900`) is used by cleanup for stale visible sessions. `Open in Browser` remains the safest manual path.
-
-Verify the frontend is hitting the visible local backend:
+Verify the Docker backend is ready:
 
 ```bash
 curl http://localhost:8000/api/autofill/status
 ```
 
-Expected fields include `browser_mode: headed`, `visible_autofill_available: true`, `chromium_installed: true`, `backend_runtime: local`, and `database_host_hint: localhost`.
+Expected local visible-autofill fields include `browser_mode: headed`, `visible_autofill_available: true`, `chromium_installed: true`, and `backend_runtime: local`.
 
-If headed mode fails with a “Missing X server” or similar display error, switch back to `PLAYWRIGHT_HEADLESS=true`, run the backend locally outside Docker, or configure a display/Xvfb. `PLAYWRIGHT_USE_XVFB=false` is the default; set it to `true` only when Xvfb is installed and you intentionally want a virtual display for headed Chromium.
+If headed mode fails with a “Missing X server” or similar display error, confirm you are running the backend locally on macOS instead of inside Docker.
 
 If Chromium is missing, install it inside the same virtualenv used to start the backend:
 
@@ -420,28 +466,38 @@ Using `127.0.0.1` avoids local environments where `localhost` resolves different
 After the stack is running, a practical trial run is:
 
 1. Open `/profile` and `/resume`; create private files from examples if needed, save, and refresh.
-2. Compile the resume PDF; if LaTeX is missing, verify the clear no-compiler message.
-3. Import a pasted job description, then test a Workday URL parse and confirm partial parsing warnings when full text is unavailable.
-4. Verify and score the imported job, then inspect recommendations.
-5. Generate an application packet and confirm the expected packet files are listed.
-6. Use `Open Application` or `Open in Browser` to log the application-link-opened event without autofill.
-7. Add a tracker note, set a follow-up, and manually mark the job applied only after you really submit outside CareerAgent.
-8. Open `/autofill`, confirm the two main actions are `Open in Browser` and `Fill Application`, and use headless diagnostics only from the advanced section.
-9. Open `/market`, `/ai`, and `/predictions`; confirm empty or small datasets are handled honestly, exports work, MockProvider works without an API key, and predictions are labeled as estimates.
+2. Open `/jobs`, discover jobs, review candidates, and save one candidate.
+3. Confirm the saved job is automatically verified and scored.
+4. Open `/apply?jobId=<id>`.
+5. Try AI-assisted apply with AI disabled and confirm the Settings message appears without starting generation.
+6. Try AI-assisted apply with MockProvider or a configured provider and confirm a reviewable packet/draft is created.
+7. Try Basic Autofill; use `Open in Browser` or `Fill Application` when a visible local backend is available.
+8. Manually submit outside CareerAgent, then click `Mark applied`.
+9. Confirm the job moves from Saved Jobs to Applied Jobs and appears in `/insights`.
 
-## Stage 10 AI Provider Setup
+## Optional API Provider Setup
 
 CareerAgent works without any API key using MockProvider.
 
-To enable OpenAI safely:
+To enable OpenAI safely for explicit writing/query assists:
 
 1. Copy `.env.example` to `.env`.
 2. Set:
 
 ```bash
 AI_PROVIDER=openai
+AI_ALLOW_EXTERNAL_CALLS=true
 OPENAI_API_KEY=your_key_here
-OPENAI_MODEL=your_model_here
+OPENAI_MODEL=gpt-4o-mini
+```
+
+Or select Gemini instead:
+
+```bash
+AI_PROVIDER=gemini
+AI_ALLOW_EXTERNAL_CALLS=true
+GEMINI_API_KEY=your_key_here
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
 3. Restart the app.
@@ -449,6 +505,9 @@ OPENAI_MODEL=your_model_here
 Important:
 
 - `.env` is gitignored.
+- Only the selected `AI_PROVIDER` is used.
+- OpenAI and Gemini are not used for parsing, matching, scoring, verification, insights, source discovery, saved-source search, autofill, or applying.
+- OpenAI/Gemini calls still require an explicit allowed action in the UI.
 - Never commit API keys.
 - Do not put API keys in `profile.yaml`.
 - Do not put API keys in source code.
@@ -548,9 +607,23 @@ Only the example/template files should appear as tracked private-data matches. I
 
 ## Resume Safety
 
-CareerAgent should preserve the user’s original LaTeX resume structure, section order, commands, formatting, spacing, fonts, margins, and visual style. Tailoring should be content-only unless the user explicitly asks for design changes. Tailored resumes should be made by minimally editing `base_resume.tex`, not by replacing it with a new template.
+CareerAgent should preserve the user’s original LaTeX resume structure, section order, commands, formatting, spacing, fonts, margins, and visual style. Tailoring should be content-only unless the user explicitly asks for design changes. AI-assisted tailoring must return a complete LaTeX source, pass structure and unsupported-claim validation, compile successfully, and fall back to deterministic tailoring if validation or compilation fails.
 
-## Stage 3 Through Stage 11 Usage
+## Primary Usage
+
+1. Open `/profile` and complete your profile, defaults, and resume.
+2. Open `/jobs`.
+3. Use Discover and Candidates to find reviewable jobs.
+4. Save the candidates you want to apply to. CareerAgent automatically verifies and scores saved jobs.
+5. Review Saved Jobs. The main action is `Apply`, which opens `/apply?jobId=<id>`.
+6. In Apply, choose `Start AI-assisted apply` for AI resume/question help, or `Start Basic Autofill` for profile-based safe autofill without AI writing.
+7. Review all drafts and filled fields yourself. CareerAgent never submits.
+8. After you manually submit on the employer site, click `Mark applied`.
+9. Review Applied Jobs from `/jobs?tab=applied` and outcomes from `/insights`.
+
+AI is optional. If AI is disabled, Apply shows a Settings link and Basic Autofill remains available. Packets are internal application materials, Tracker lives in Insights, Follow-ups are hidden from the primary workflow, and the full job detail page is an advanced secondary view.
+
+## Legacy Stage Usage Notes
 
 ### Job import workflow
 
@@ -640,13 +713,13 @@ Workday and JavaScript-heavy job pages:
 
 ### Stage 10 AI workflow
 
-1. Open `/ai`.
-2. Confirm MockProvider is active when no API key is configured.
-3. Run the provider test form with `mock`.
-4. To use OpenAI, set `AI_PROVIDER=openai`, `OPENAI_API_KEY`, and optionally `OPENAI_MODEL` in private `.env`, then restart the app.
-5. Use optional AI parsing on `/jobs` only when you want a reviewable enhanced parse.
-6. Use optional AI drafts from a job detail page when generating packet materials.
-7. Use optional AI insights from `/market` when you want a short draft summary of stored analytics.
+1. Open `/settings`.
+2. Confirm the active provider, external AI allow flag, OpenAI status, and Gemini status are shown.
+3. Run the provider test form with `mock`; it does not make paid external calls.
+4. To use OpenAI, set `AI_PROVIDER=openai`, `AI_ALLOW_EXTERNAL_CALLS=true`, `OPENAI_API_KEY`, and optionally `OPENAI_MODEL` in private `.env`, then restart the app.
+5. To use Gemini instead, set `AI_PROVIDER=gemini`, `AI_ALLOW_EXTERNAL_CALLS=true`, `GEMINI_API_KEY`, and optionally `GEMINI_MODEL` in private `.env`, then restart the app.
+6. Use optional AI packet drafts or Job Finder keyword help only when you explicitly choose them.
+7. Job parsing, matching, scoring, saved-source search, and market insights remain local/rule-based.
 
 ### Stage 11 prediction workflow
 
@@ -663,14 +736,15 @@ Workday and JavaScript-heavy job pages:
 
 ### Stage 12 job finder workflow
 
-1. Open `/job-finder`.
+1. Open `/jobs?tab=discover`.
 2. Generate rule-based queries or use the default test queries.
 3. Select source types such as Greenhouse, Lever, Ashby, Workday, and company career pages.
 4. Paste company career URLs, ATS board URLs, or manual job links.
-5. Click `Find Jobs`.
+5. Click `Find Jobs` or search saved sources.
 6. Review candidates, filter reasons, duplicate markers, and source warnings.
-7. Import one candidate or select multiple candidates and click `Import Selected`.
-8. Optionally verify/score imported jobs, then continue with packets, tracker, and manual application flow.
+7. Save one candidate or select multiple candidates and click `Save Selected`.
+8. CareerAgent automatically verifies and scores saved jobs.
+9. Continue from `/apply` with AI-assisted apply or Basic Autofill, then track outcomes in `/insights`.
 
 Stage 12 safety: CareerAgent uses small, source-based fetches with timeouts and a normal user agent, respects `robots.txt` where practical for page fetches, does not use credentials, does not bypass CAPTCHAs/login walls, does not scrape LinkedIn/Indeed automatically, and never submits applications.
 
@@ -700,7 +774,7 @@ Stage 12 safety: CareerAgent uses small, source-based fetches with timeouts and 
 - Autofill is rule-based and may miss fields or misclassify unusual layouts.
 - Some job sites require login or block automation before the real application form appears.
 - CareerAgent never bypasses CAPTCHAs, anti-bot protections, or login walls.
-- Docker defaults autofill to headless mode because headed Chromium needs a display/XServer. Local backend execution is the simplest visible-browser path on macOS.
+- Docker cannot open native macOS Chromium windows; local backend execution is the visible-browser path on macOS.
 - CareerAgent still stops before final submission every time.
 - AI-assisted parsing is Stage 10.
 - Some parsed, verified, and scored fields will be imperfect because CareerAgent currently uses deterministic rule-based parsing, verification, and scoring instead of AI or browser automation.
@@ -729,7 +803,6 @@ Stage 12 safety: CareerAgent uses small, source-based fetches with timeouts and 
 - `GET /api/market/activity`
 - `GET /api/market/stale-jobs`
 - `GET /api/market/insights`
-- `GET /api/market/insights?use_ai=true&provider=mock`
 - `GET /api/market/export?format=json`
 - `GET /api/market/export?format=csv`
 - `GET /api/prediction/dashboard`
@@ -758,9 +831,8 @@ Stage 12 safety: CareerAgent uses small, source-based fetches with timeouts and 
 - `GET /api/jobs`
 - `POST /api/jobs/parse`
 - `POST /api/jobs/parse` with `use_ai=false`
-- `POST /api/jobs/parse` with `use_ai=true` and `provider=mock`
 - `POST /api/jobs/import`
-- `POST /api/jobs/import` with optional `use_ai` and `provider`
+- `POST /api/jobs/import`
 - `POST /api/jobs/verify-url`
 - `POST /api/jobs/verify-all`
 - `POST /api/jobs/score-all`
@@ -774,7 +846,7 @@ Stage 12 safety: CareerAgent uses small, source-based fetches with timeouts and 
 - `DELETE /api/jobs/{id}`
 - `GET /api/packets`
 - `POST /api/packets/generate`
-- `POST /api/packets/generate` with optional `use_ai` and `provider`
+- `POST /api/packets/generate` with optional guarded `use_ai`, `ai_tasks`, and `user_triggered`
 - `GET /api/packets/{id}`
 - `GET /api/packets/job/{job_id}`
 - `GET /api/packets/{id}/file?file_key=cover_letter`
@@ -932,10 +1004,10 @@ careeragent/
 ### Stage 10: AI Provider Integration
 
 - Status: Complete
-- Add provider pattern with `MockProvider`, `OpenAIProvider`, and a `LocalLLMProvider` placeholder.
+- Add provider pattern with `MockProvider`, `OpenAIProvider`, and `GeminiProvider`.
 - Keep MockProvider available without API keys.
-- Use optional AI for job parsing, resume tailoring advice, cover letters, recruiter messages, application question drafts, and market insight summaries.
-- Keep rule-based parsing, deterministic packet generation, and rule-based insights as safe defaults and fallbacks.
+- Use optional AI only for resume tailoring advice, cover letters, recruiter messages, application question drafts, and Job Finder keyword suggestions.
+- Keep parsing, matching, scoring, verification, saved-source search, deterministic packet generation, and insights local/rule-based.
 - Keep outputs reviewable and safety-checked.
 
 ### Stage 11: Prediction and Improvements
@@ -966,7 +1038,7 @@ careeragent/
 
 ## Beyond Stage 12
 
-Future stages can refine prediction feedback loops, follow-up planning, ATS coverage, local-model support, reminder integrations, richer company-source management, web-search provider integration, and browser-rendered source discovery while keeping CareerAgent human-in-the-loop and safe.
+Future stages can refine prediction feedback loops, follow-up planning, ATS coverage, reminder integrations, richer company-source management, and browser-rendered source discovery while keeping CareerAgent human-in-the-loop and safe.
 
 ## Planned Improvements
 

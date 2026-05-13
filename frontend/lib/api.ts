@@ -117,7 +117,8 @@ export type ApplicationPacketGenerateRequest = {
   include_application_questions: boolean;
   compile_resume_pdf: boolean;
   use_ai?: boolean;
-  provider?: string;
+  ai_tasks?: string[];
+  user_triggered?: boolean;
 };
 
 export type ApplicationPacketGenerateResponse = {
@@ -128,6 +129,80 @@ export type ApplicationPacketGenerateResponse = {
   compile_resume_pdf_success: boolean;
   files_created: string[];
   metadata: Record<string, unknown>;
+};
+
+export type StartAiAssistedApplyRequest = {
+  user_triggered?: boolean;
+  include_resume?: boolean;
+  include_cover_letter?: boolean;
+  include_application_answers?: boolean;
+};
+
+export type StartAiAssistedApplyResponse = {
+  success: boolean;
+  job_id: number;
+  packet_id: number;
+  packet_status: string;
+  ai_used: boolean;
+  provider: string | null;
+  message: string;
+  warnings: string[];
+  visible_autofill_available: boolean;
+  can_fill_application: boolean;
+  browser_mode: "headless" | "headed";
+  configured_browser_mode: string;
+  setup_instructions?: string[] | null;
+  setup_command?: string | null;
+  autofill_environment?: AutofillStatus;
+  next_actions: string[];
+  packet: ApplicationPacket;
+  job: Job;
+};
+
+export type StartBasicAutofillRequest = {
+  user_triggered?: boolean;
+  allow_base_resume_upload?: boolean;
+  fill_sensitive_optional_fields?: boolean;
+};
+
+export type StartBasicAutofillResponse = {
+  success: boolean;
+  status: string;
+  job_id: number;
+  job: Job;
+  open_url: string;
+  packet_id?: number | null;
+  packet_status?: string | null;
+  upload_status?: string | null;
+  visible_autofill_available: boolean;
+  browser_mode: "headless" | "headed";
+  configured_browser_mode: string;
+  can_fill_application: boolean;
+  can_open_in_browser: boolean;
+  manual_review_required: boolean;
+  message: string;
+  setup_instructions: string[] | null;
+  setup_command?: string | null;
+  packet?: ApplicationPacket | null;
+  manual_values?: AutofillManualValue[];
+  files_available?: string[];
+  warnings?: string[];
+  next_actions: string[];
+};
+
+export type FillApplicationRequest = {
+  user_triggered?: boolean;
+  packet_id?: number | null;
+  allow_base_resume_upload?: boolean;
+  fill_sensitive_optional_fields?: boolean;
+  keep_browser_open?: boolean;
+  ai_assisted_apply?: boolean;
+};
+
+export type FillApplicationResponse = AutofillStartResponse & {
+  blocked_final_actions?: string[];
+  setup_command?: string | null;
+  setup_instructions?: string[];
 };
 
 export type ApplicationPacketFilePreview = {
@@ -142,8 +217,6 @@ export type JobImportRequest = {
   input_type: "description" | "url";
   content: string;
   source: string;
-  use_ai?: boolean;
-  provider?: string;
 };
 
 export type JobParseResult = {
@@ -228,6 +301,11 @@ export type JobFinderQueryResponse = {
   queries: string[];
   default_queries: string[];
   warnings: string[];
+  api_used?: boolean;
+  provider?: string | null;
+  api_action?: string | null;
+  model?: string | null;
+  blocked_reason?: string | null;
 };
 
 export type JobFinderRunRequest = {
@@ -244,6 +322,8 @@ export type JobFinderRunRequest = {
   target_experience_levels?: string[];
   excluded_experience_levels?: string[];
   degree_filter?: DegreeFilter;
+  allow_unknown_location?: boolean;
+  location_filter?: LocationFilter;
 };
 
 export type DegreeFilter = {
@@ -254,6 +334,15 @@ export type DegreeFilter = {
   allow_phd_preferred: boolean;
   allow_phd_required: boolean;
   allow_unknown: boolean;
+};
+
+export type LocationFilter = {
+  allow_bay_area: boolean;
+  allow_remote_us: boolean;
+  allow_unknown: boolean;
+  allow_non_bay_area_california: boolean;
+  allow_other_us: boolean;
+  allow_international: boolean;
 };
 
 export type JobCandidate = {
@@ -410,6 +499,8 @@ export type SavedSourceSearchRequest = {
   target_experience_levels?: string[];
   excluded_experience_levels?: string[];
   degree_filter?: DegreeFilter;
+  allow_unknown_location?: boolean;
+  location_filter?: LocationFilter;
 };
 
 export type SavedSourceSearchResult = {
@@ -455,6 +546,12 @@ export type JobFinderSearchDiagnostics = {
   duplicates?: number;
   incomplete?: number;
   near_match_fallback_used?: boolean;
+  bay_area_found?: number;
+  remote_us_found?: number;
+  unknown_location_found?: number;
+  non_bay_area_california_found?: number;
+  other_us_found?: number;
+  international_found?: number;
   zero_result_diagnostics?: {
     sample_excluded?: Array<{
       company?: string | null;
@@ -500,11 +597,22 @@ export type AIStatus = {
   configured_provider: string;
   active_provider: string;
   openai_available: boolean;
-  local_available: boolean;
+  gemini_available: boolean;
   api_key_present: boolean;
+  gemini_key_present: boolean;
   api_key_preview: null;
   safety_mode: boolean;
   message: string;
+  ai_allow_external_calls: boolean;
+  active_ai_provider: string;
+  openai_configured: boolean;
+  gemini_configured: boolean;
+  both_provider_keys_configured: boolean;
+  openai_model: string;
+  gemini_model: string;
+  current_model: string;
+  allowed_ai_actions: string[];
+  recent_api_usage: Array<Record<string, unknown>>;
 };
 
 export type AIProviderInfo = {
@@ -518,9 +626,11 @@ export type AIProvidersResponse = {
 };
 
 export type AITestRequest = {
-  provider: string;
   task: string;
   prompt: string;
+  user_enabled?: boolean;
+  user_triggered?: boolean;
+  max_output_tokens?: number;
 };
 
 export type AIProviderResult = {
@@ -539,7 +649,38 @@ export type JobFilters = {
   role_category?: string;
   source?: string;
   search?: string;
+  saved_only?: boolean;
+  applied_only?: boolean;
 };
+
+const SAVED_JOB_STATUSES = new Set([
+  "saved",
+  "ready_to_apply",
+  "verified_open",
+  "packet_ready",
+  "application_opened",
+  "applying",
+  "autofill_started",
+  "autofill_completed",
+]);
+
+const APPLIED_JOB_STATUSES = new Set([
+  "applied",
+  "applied_manual",
+  "interview",
+  "rejected",
+  "offer",
+  "withdrawn",
+  "closed_after_apply",
+]);
+
+function isSavedJob(job: Job) {
+  return SAVED_JOB_STATUSES.has(job.application_status) && job.applied_at === null;
+}
+
+function isAppliedJob(job: Job) {
+  return APPLIED_JOB_STATUSES.has(job.application_status) || job.applied_at !== null;
+}
 
 export type RecommendationFilters = {
   limit?: number;
@@ -674,6 +815,18 @@ export type OpenApplicationResponse = {
   job: Job;
   event: ApplicationEvent;
   url: string;
+  message: string;
+};
+
+export type ApplyStartResponse = {
+  job: Job;
+  message: string;
+  manual_review_required?: boolean;
+};
+
+export type MarkAppliedResponse = {
+  job: Job;
+  event: ApplicationEvent;
   message: string;
 };
 
@@ -1108,6 +1261,8 @@ export type AutofillStatus = {
   playwright_headless: boolean;
   playwright_use_xvfb: boolean;
   playwright_slow_mo_ms: number;
+  env_file_loaded: boolean;
+  env_path: string;
   install_command: string;
   playwright_install_hint: string;
   python_executable: string;
@@ -1155,10 +1310,17 @@ export type AutofillManualValue = {
 export type AutofillFieldResult = {
   field_key: string;
   label: string | null;
+  question?: string | null;
+  category?: string | null;
+  action?: string | null;
   selector: string | null;
   filled: boolean;
   confidence: number;
+  value_preview?: string | null;
+  value?: string | null;
   reason: string;
+  provider?: string | null;
+  review_required?: boolean;
 };
 
 export type AutofillPreviewResponse = {
@@ -1241,10 +1403,62 @@ export type ResumeCompileResult = {
 
 function getBaseUrl() {
   if (typeof window === "undefined") {
-    return process.env.API_SERVER_URL || process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+    return (process.env.API_SERVER_URL || process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000").replace(/\/$/, "");
   }
 
-  return process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+  const configuredUrl = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+  try {
+    const parsed = new URL(configuredUrl);
+    if (parsed.hostname === "backend" || parsed.hostname === "0.0.0.0") {
+      parsed.hostname = "localhost";
+      return parsed.toString().replace(/\/$/, "");
+    }
+  } catch {
+    return configuredUrl.replace(/\/$/, "");
+  }
+  return configuredUrl.replace(/\/$/, "");
+}
+
+function formatApiDetail(detail: unknown): string | null {
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    return detail
+      .map((entry) => {
+        if (entry && typeof entry === "object") {
+          const record = entry as Record<string, unknown>;
+          const location = Array.isArray(record.loc) ? record.loc.join(".") : "";
+          const message = typeof record.msg === "string" ? record.msg : JSON.stringify(record);
+          return location ? `${location}: ${message}` : message;
+        }
+        return String(entry);
+      })
+      .join("; ");
+  }
+  if (detail && typeof detail === "object") {
+    return JSON.stringify(detail);
+  }
+  return null;
+}
+
+function errorMessageForResponse(method: string, path: string, status: number, data: unknown) {
+  const record = data && typeof data === "object" && !Array.isArray(data) ? (data as Record<string, unknown>) : null;
+  const detail = formatApiDetail(record?.detail ?? record?.message ?? data);
+  const prefix = `${method} ${path} returned ${status}`;
+  if (detail) {
+    return `${prefix}: ${detail}`;
+  }
+  if (status === 404) {
+    return `${prefix}: Endpoint or resource not found.`;
+  }
+  if (status === 422) {
+    return `${prefix}: Validation failed.`;
+  }
+  if (status >= 500) {
+    return `${prefix}: Backend error.`;
+  }
+  return `${prefix}: Request failed.`;
 }
 
 async function fetchJsonWithFallback<T>(path: string, fallback: T): Promise<T> {
@@ -1264,32 +1478,38 @@ async function fetchJsonWithFallback<T>(path: string, fallback: T): Promise<T> {
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${getBaseUrl()}${path}`, {
-    cache: "no-store",
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers || {})
+  const baseUrl = getBaseUrl();
+  const method = (init?.method || "GET").toUpperCase();
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      cache: "no-store",
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers || {})
+      }
+    });
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error(`Could not reach backend at ${baseUrl} while calling ${method} ${path}. Make sure the backend is running and NEXT_PUBLIC_API_BASE_URL is browser-reachable.`);
     }
-  });
+    throw error;
+  }
 
   const text = await response.text();
-  let data: Record<string, unknown> | null = null;
+  let data: unknown = null;
 
   if (text) {
     try {
-      data = JSON.parse(text) as Record<string, unknown>;
+      data = JSON.parse(text) as unknown;
     } catch {
       data = null;
     }
   }
 
   if (!response.ok) {
-    const detail =
-      data && typeof data.detail === "string"
-        ? data.detail
-        : `Request failed with status ${response.status}.`;
-    throw new Error(detail);
+    throw new Error(errorMessageForResponse(method, path, response.status, data));
   }
 
   return data as T;
@@ -1309,6 +1529,12 @@ export async function getJobs(filters?: JobFilters): Promise<Job[]> {
   if (filters?.search) {
     params.set("search", filters.search);
   }
+  if (filters?.saved_only !== undefined) {
+    params.set("saved_only", String(filters.saved_only));
+  }
+  if (filters?.applied_only !== undefined) {
+    params.set("applied_only", String(filters.applied_only));
+  }
 
   const query = params.toString();
   return requestJson<Job[]>(`/api/jobs${query ? `?${query}` : ""}`);
@@ -1318,11 +1544,21 @@ export async function getJob(id: number | string): Promise<Job> {
   return requestJson<Job>(`/api/jobs/${id}`);
 }
 
+export async function getSavedJobs(): Promise<Job[]> {
+  const jobs = await getJobs({ saved_only: true });
+  return jobs.filter(isSavedJob);
+}
+
+export async function getAppliedJobs(): Promise<Job[]> {
+  const jobs = await getJobs({ applied_only: true });
+  return jobs.filter(isAppliedJob);
+}
+
 export async function getJobFinderStatus(): Promise<JobFinderStatus> {
   return requestJson<JobFinderStatus>("/api/job-finder/status");
 }
 
-export async function generateJobFinderQueries(payload: { use_ai?: boolean; provider?: string }): Promise<JobFinderQueryResponse> {
+export async function generateJobFinderQueries(payload: { use_ai?: boolean; user_enabled?: boolean; user_triggered?: boolean }): Promise<JobFinderQueryResponse> {
   return requestJson<JobFinderQueryResponse>("/api/job-finder/generate-queries", {
     method: "POST",
     body: JSON.stringify(payload)
@@ -1439,6 +1675,19 @@ export async function importJobCandidate(
   });
 }
 
+export async function saveCandidate(candidateId: number | string): Promise<JobCandidateImportResponse> {
+  return requestJson<JobCandidateImportResponse>(`/api/job-finder/candidates/${candidateId}/save`, {
+    method: "POST"
+  });
+}
+
+export async function saveSelectedCandidates(candidateIds: number[]): Promise<JobCandidateImportSelectedResponse> {
+  return requestJson<JobCandidateImportSelectedResponse>("/api/job-finder/candidates/import-selected", {
+    method: "POST",
+    body: JSON.stringify({ candidate_ids: candidateIds })
+  });
+}
+
 export async function importSelectedJobCandidates(payload: {
   candidate_ids: number[];
   auto_verify?: boolean;
@@ -1460,6 +1709,10 @@ export async function getPacket(id: number | string): Promise<ApplicationPacket>
 
 export async function getPacketsForJob(jobId: number | string): Promise<ApplicationPacket[]> {
   return requestJson<ApplicationPacket[]>(`/api/packets/job/${jobId}`);
+}
+
+export async function getJobPackets(jobId: number | string): Promise<ApplicationPacket[]> {
+  return getPacketsForJob(jobId);
 }
 
 export async function generatePacket(payload: ApplicationPacketGenerateRequest): Promise<ApplicationPacketGenerateResponse> {
@@ -1541,6 +1794,13 @@ export async function openApplicationLink(jobId: number | string): Promise<OpenA
   });
 }
 
+export async function openApplication(jobId: number | string): Promise<OpenApplicationResponse> {
+  return requestJson<OpenApplicationResponse>(`/api/jobs/${jobId}/open-application`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
 export async function getTrackerEvents(filters?: TrackerEventFilters): Promise<ApplicationEvent[]> {
   const params = new URLSearchParams();
   if (filters?.limit !== undefined) {
@@ -1569,6 +1829,66 @@ export async function importJob(payload: JobImportRequest): Promise<Job> {
     method: "POST",
     body: JSON.stringify(payload)
   });
+}
+
+export async function startAiAssistedApply(
+  jobId: number | string,
+  payload: StartAiAssistedApplyRequest = {},
+): Promise<StartAiAssistedApplyResponse> {
+  return requestJson<StartAiAssistedApplyResponse>(`/api/jobs/${jobId}/apply/start-ai-assisted`, {
+    method: "POST",
+    body: JSON.stringify({
+      user_triggered: true,
+      include_resume: true,
+      include_cover_letter: true,
+      include_application_answers: true,
+      ...payload,
+    })
+  });
+}
+
+export async function startBasicAutofill(
+  jobId: number | string,
+  payload: StartBasicAutofillRequest = {},
+): Promise<StartBasicAutofillResponse> {
+  return requestJson<StartBasicAutofillResponse>(`/api/jobs/${jobId}/apply/start-basic-autofill`, {
+    method: "POST",
+    body: JSON.stringify({
+      user_triggered: true,
+      allow_base_resume_upload: true,
+      fill_sensitive_optional_fields: false,
+      ...payload,
+    })
+  });
+}
+
+export async function fillApplication(
+  jobId: number | string,
+  payload: FillApplicationRequest = {},
+): Promise<FillApplicationResponse> {
+  return requestJson<FillApplicationResponse>(`/api/jobs/${jobId}/apply/fill-application`, {
+    method: "POST",
+    body: JSON.stringify({
+      user_triggered: true,
+      packet_id: null,
+      allow_base_resume_upload: true,
+      fill_sensitive_optional_fields: false,
+      keep_browser_open: true,
+      ai_assisted_apply: false,
+      ...payload,
+    })
+  });
+}
+
+export async function markJobApplied(jobId: number | string): Promise<MarkAppliedResponse> {
+  return requestJson<MarkAppliedResponse>(`/api/jobs/${jobId}/mark-applied`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export async function getInsightsTrackerSummary(): Promise<TrackerSummary> {
+  return getTrackerSummary();
 }
 
 export async function updateJob(id: number | string, payload: Partial<Job>): Promise<Job> {
@@ -1658,11 +1978,22 @@ export async function getAIStatus(): Promise<AIStatus> {
     configured_provider: "mock",
     active_provider: "mock",
     openai_available: false,
-    local_available: false,
+    gemini_available: false,
     api_key_present: false,
+    gemini_key_present: false,
     api_key_preview: null,
     safety_mode: true,
-    message: "Using MockProvider. Set AI_PROVIDER=openai and OPENAI_API_KEY in .env to enable OpenAI.",
+    message: "External AI calls are disabled unless AI_ALLOW_EXTERNAL_CALLS=true and you explicitly trigger an allowed action.",
+    ai_allow_external_calls: false,
+    active_ai_provider: "mock",
+    openai_configured: false,
+    gemini_configured: false,
+    both_provider_keys_configured: false,
+    openai_model: "gpt-4o-mini",
+    gemini_model: "gemini-2.5-flash",
+    current_model: "mock",
+    allowed_ai_actions: [],
+    recent_api_usage: [],
   });
 }
 
@@ -1671,7 +2002,7 @@ export async function getAIProviders(): Promise<AIProvidersResponse> {
     providers: [
       { name: "mock", available: true, message: null },
       { name: "openai", available: false, message: "Unavailable." },
-      { name: "local", available: false, message: "Placeholder provider." },
+      { name: "gemini", available: false, message: "Unavailable." },
     ],
   });
 }
@@ -1877,14 +2208,8 @@ export async function getStaleJobs(): Promise<StaleJob[]> {
   return requestJson<StaleJob[]>("/api/market/stale-jobs");
 }
 
-export async function getMarketInsights(useAI = false, provider = "mock"): Promise<MarketInsight[]> {
-  const params = new URLSearchParams({
-    use_ai: String(useAI),
-  });
-  if (provider) {
-    params.set("provider", provider);
-  }
-  return requestJson<MarketInsight[]>(`/api/market/insights?${params.toString()}`);
+export async function getMarketInsights(): Promise<MarketInsight[]> {
+  return requestJson<MarketInsight[]>("/api/market/insights");
 }
 
 export function getMarketExport(format: "json" | "csv" = "json"): string {
@@ -2040,6 +2365,8 @@ export async function getAutofillStatus(): Promise<AutofillStatus> {
     playwright_headless: true,
     playwright_use_xvfb: false,
     playwright_slow_mo_ms: 0,
+    env_file_loaded: false,
+    env_path: "",
     install_command: "python -m playwright install chromium",
     playwright_install_hint: "python -m playwright install chromium",
     python_executable: "unknown",

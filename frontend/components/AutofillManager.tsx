@@ -122,8 +122,6 @@ export function AutofillManager({ status, safety, initialJobId = null }: Autofil
             "- This is not a real job.",
           ].join("\n"),
           source: "local_test",
-          use_ai: false,
-          provider: "mock",
         });
       }
 

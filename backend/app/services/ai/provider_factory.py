@@ -3,11 +3,11 @@ from __future__ import annotations
 from app.core.config import settings
 
 from .base import AIProvider
-from .local_provider import LocalLLMProvider
+from .gemini_provider import GeminiProvider
 from .mock_provider import MockProvider
 from .openai_provider import OpenAIProvider
 
-SUPPORTED_PROVIDER_NAMES = ("mock", "openai", "local")
+SUPPORTED_PROVIDER_NAMES = ("mock", "openai", "gemini")
 
 
 def normalize_provider_name(provider_name: str | None) -> str:
@@ -21,8 +21,8 @@ def get_ai_provider(provider_name: str | None = None) -> AIProvider:
     resolved_name = normalize_provider_name(provider_name or settings.ai_provider)
     if resolved_name == "openai":
         return OpenAIProvider()
-    if resolved_name == "local":
-        return LocalLLMProvider()
+    if resolved_name == "gemini":
+        return GeminiProvider()
     return MockProvider()
 
 
@@ -34,7 +34,7 @@ def get_active_ai_provider(provider_name: str | None = None) -> AIProvider:
 
 
 def get_provider_availability() -> list[dict[str, str | bool | None]]:
-    providers = [MockProvider(), OpenAIProvider(), LocalLLMProvider()]
+    providers = [MockProvider(), OpenAIProvider(), GeminiProvider()]
     return [
         {
             "name": provider.name,

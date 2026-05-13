@@ -17,11 +17,12 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.application_packet import ApplicationPacket
 from app.models.job import Job
+from app.services.ai import get_ai_provider, require_ai_allowed
 from app.services.profile.profile_store import load_profile_document
 from app.services.resume import compile_latex_file, load_resume_document
 from app.services.tracker import log_event, promote_job_status_if_needed
 
-from .field_detector import SENSITIVE_FIELD_KEYS, detect_form_fields
+from .field_detector import LONG_ANSWER_FIELD_KEYS, SENSITIVE_FIELD_KEYS, detect_form_fields
 from .safe_actions import BLOCKED_FINAL_SUBMIT_WORDS, should_block_element
 from .session_store import (
     cleanup_closed_sessions,
@@ -49,21 +50,20 @@ HEADED_REVIEW_MESSAGE = (
     "continue reviewing manually."
 )
 VISIBLE_UNAVAILABLE_MESSAGE = (
-    "Fill Application requires a visible browser session so you can continue from the filled form. "
-    "The current Docker backend is running headless, so it cannot hand off a live browser. "
-    "Use Open in Browser, or run the backend locally with PLAYWRIGHT_HEADLESS=false."
+    "Fill Application requires Playwright headed mode on the host machine. Docker on macOS cannot open a normal "
+    "Chromium window you can continue from."
 )
-VISIBLE_UNAVAILABLE_FIX = "Run the backend locally outside Docker with PLAYWRIGHT_HEADLESS=false and a display, then retry visible autofill."
+VISIBLE_UNAVAILABLE_FIX = "Run the backend locally with PLAYWRIGHT_HEADLESS=false for native Chromium review."
 NO_FIELDS_MESSAGE = "CareerAgent opened the page, but no application form fields were detected."
 NO_FIELDS_REASON = (
     "This may be a job detail page, a JavaScript-heavy page, a page requiring login, or not the actual application form."
 )
 NO_FIELDS_NEXT_ACTION = "Use Open in Browser or navigate to the actual application form manually."
 DISPLAY_UNAVAILABLE_MESSAGE = (
-    "Headed Chromium cannot launch because the Docker container has no X server/display. "
-    "Set PLAYWRIGHT_HEADLESS=true or run the backend locally with a display."
+    "Headed Chromium cannot launch because no browser display is available. "
+    "Run the backend locally with PLAYWRIGHT_HEADLESS=false to open a normal Chromium window."
 )
-DISPLAY_UNAVAILABLE_FIX = "Use headless mode in Docker, or run backend locally outside Docker for visible browser autofill."
+DISPLAY_UNAVAILABLE_FIX = "Stop the Docker backend and run the backend locally with PLAYWRIGHT_HEADLESS=false."
 WORKDAY_MANUAL_MESSAGE = (
     "CareerAgent could not open this Workday page with Playwright. Workday often blocks or redirects automation and may "
     "require manual browser navigation."
@@ -165,6 +165,10 @@ MANUAL_VALUE_LABELS = {
     "last_name": "Last name",
     "email": "Email",
     "phone": "Phone",
+    "current_location": "Current location",
+    "current_company": "Current company",
+    "pronouns": "Pronouns",
+    "future_job_opportunities_consent": "Future job opportunities consent",
     "linkedin": "LinkedIn",
     "github": "GitHub",
     "portfolio": "Portfolio",
@@ -280,6 +284,83 @@ def _parse_yes_no_answer(answer: str) -> bool | None:
     return None
 
 
+def _normalize_public_url(value: Any, host_hint: str) -> str | None:
+    raw_value = _first_non_empty(value)
+    if not raw_value:
+        return None
+    normalized = raw_value.strip()
+    if normalized.startswith("@"):
+        normalized = normalized[1:]
+    if normalized.startswith("http://") or normalized.startswith("https://"):
+        return normalized
+    if "." in normalized and "/" in normalized:
+        return f"https://{normalized}"
+    if not host_hint:
+        return normalized
+    if host_hint in normalized:
+        return f"https://{normalized}"
+    return f"https://{host_hint}/{normalized.strip('/')}"
+
+
+def _profile_current_company(profile: dict[str, Any]) -> str | None:
+    personal = dict(profile.get("personal") or {})
+    employment = dict(profile.get("employment") or {})
+    work = dict(profile.get("work") or {})
+    experience = profile.get("experience") or profile.get("work_experience") or []
+    direct_value = _first_non_empty(
+        personal.get("current_company"),
+        personal.get("current_employer"),
+        employment.get("current_company"),
+        employment.get("current_employer"),
+        work.get("current_company"),
+        work.get("current_employer"),
+    )
+    if direct_value:
+        return direct_value
+    if isinstance(experience, list):
+        for item in experience:
+            if not isinstance(item, dict):
+                continue
+            if item.get("current") is True or _normalize_key_text(item.get("end_date")) in {"present", "current", "now"}:
+                return _first_non_empty(item.get("company"), item.get("organization"), item.get("employer"))
+    return None
+
+
+def _email_domain_warnings(email: str | None) -> list[str]:
+    if not email or "@" not in email:
+        return []
+    domain = email.rsplit("@", 1)[-1].strip().lower()
+    suspicious_domains = {
+        "berkely.edu": "berkeley.edu",
+        "gmai.com": "gmail.com",
+        "gmial.com": "gmail.com",
+        "hotmial.com": "hotmail.com",
+    }
+    if domain in suspicious_domains:
+        return [f"{domain} looks like a possible typo for {suspicious_domains[domain]}. Review manually."]
+    return []
+
+
+def _field_label(field: dict[str, Any]) -> str:
+    return _first_non_empty(
+        field.get("question_text"),
+        field.get("label_text"),
+        field.get("placeholder"),
+        field.get("name"),
+        field.get("id"),
+        field.get("field_key"),
+    ) or "Detected field"
+
+
+def _preview_value(value: Any) -> str | None:
+    if value in (None, "", []):
+        return None
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    preview = _normalize_text(value)
+    return preview[:117] + "..." if len(preview) > 120 else preview
+
+
 def _load_packet_question_answers(packet: ApplicationPacket | None) -> dict[str, Any]:
     if packet is None:
         return {}
@@ -362,7 +443,13 @@ def _summarize_relevant_skills(job: Job, profile: dict[str, Any]) -> str:
     return "my existing background"
 
 
-def build_autofill_values(profile: dict[str, Any], packet: ApplicationPacket | None, job: Job) -> dict[str, Any]:
+def build_autofill_values(
+    profile: dict[str, Any],
+    packet: ApplicationPacket | None,
+    job: Job,
+    *,
+    include_application_drafts: bool = False,
+) -> dict[str, Any]:
     personal = dict(profile.get("personal") or {})
     education = dict(profile.get("education") or {})
     links = dict(profile.get("links") or {})
@@ -378,9 +465,17 @@ def build_autofill_values(profile: dict[str, Any], packet: ApplicationPacket | N
         if len(name_parts) > 1:
             values["last_name"] = " ".join(name_parts[1:])
 
+    current_location = _first_non_empty(personal.get("location"), application_defaults.get("current_location"))
+    current_company = _profile_current_company(profile)
+    linkedin_url = _normalize_public_url(links.get("linkedin"), "www.linkedin.com/in")
+    github_url = _normalize_public_url(links.get("github"), "github.com")
+
     for field_key, source_value in {
         "email": personal.get("email"),
         "phone": personal.get("phone"),
+        "current_location": current_location,
+        "current_company": current_company,
+        "pronouns": _first_non_empty(personal.get("pronouns"), application_defaults.get("pronouns")),
         "address": _first_non_empty(personal.get("address"), personal.get("street_address")),
         "city": _first_non_empty(personal.get("city"), str(personal.get("location") or "").split(",")[0]),
         "state": _first_non_empty(
@@ -394,10 +489,10 @@ def build_autofill_values(profile: dict[str, Any], packet: ApplicationPacket | N
             personal.get("country"),
             str(personal.get("location") or "").split(",")[2] if str(personal.get("location") or "").count(",") >= 2 else None,
         ),
-        "linkedin": links.get("linkedin"),
-        "github": links.get("github"),
-        "portfolio": _first_non_empty(links.get("portfolio"), links.get("website")),
-        "website": _first_non_empty(links.get("website"), links.get("portfolio")),
+        "linkedin": linkedin_url,
+        "github": github_url,
+        "portfolio": _normalize_public_url(_first_non_empty(links.get("portfolio"), links.get("website")), ""),
+        "website": _normalize_public_url(_first_non_empty(links.get("website"), links.get("portfolio")), ""),
         "school": education.get("school"),
         "degree": education.get("degree"),
         "graduation_date": _first_non_empty(education.get("graduation"), education.get("graduation_date")),
@@ -419,33 +514,39 @@ def build_autofill_values(profile: dict[str, Any], packet: ApplicationPacket | N
     if question_policy.get("answer_relocation", True) and "willing_to_relocate" in application_defaults:
         values["willing_to_relocate"] = bool(application_defaults.get("willing_to_relocate"))
 
+    if "future_job_opportunities_consent" in application_defaults:
+        values["future_job_opportunities_consent"] = bool(application_defaults.get("future_job_opportunities_consent"))
+
     profile_only_answer_keys = {
         "work_authorized_us",
         "need_sponsorship_now",
         "need_sponsorship_future",
         "willing_to_relocate",
     }
-    prompt_answers = {
-        key: value
-        for key, value in _load_packet_question_answers(packet).items()
-        if key not in profile_only_answer_keys
-    }
-    values.update({key: value for key, value in prompt_answers.items() if _first_non_empty(value)})
+    if include_application_drafts:
+        prompt_answers = {
+            key: value
+            for key, value in _load_packet_question_answers(packet).items()
+            if key not in profile_only_answer_keys
+        }
+        values.update({key: value for key, value in prompt_answers.items() if _first_non_empty(value)})
 
-    if not values.get("why_company"):
-        relevant_skills = _summarize_relevant_skills(job, profile)
-        values["why_company"] = (
-            f"I'm interested in {job.company} because the {job.title} role overlaps with work I'm already pursuing, "
-            f"especially around {relevant_skills}. I would still review the company mission and team context manually before submitting."
-        )
+        if not values.get("why_company"):
+            relevant_skills = _summarize_relevant_skills(job, profile)
+            values["why_company"] = (
+                f"AI draft. Review manually before using.\n\n"
+                f"I'm interested in {job.company} because the {job.title} role overlaps with work I'm already pursuing, "
+                f"especially around {relevant_skills}. I would still review the company mission and team context manually before submitting."
+            )
 
-    if not values.get("tell_us_about_yourself"):
-        current_focus = _first_non_empty(education.get("degree"), ", ".join(profile.get("target_roles") or []), "the work in my resume")
-        relevant_skills = _summarize_relevant_skills(job, profile)
-        values["tell_us_about_yourself"] = (
-            f"I'm currently focused on {current_focus}. The parts of my existing background that line up most closely with this role are "
-            f"{relevant_skills}. I would still review and personalize this draft before submitting it."
-        )
+        if not values.get("tell_us_about_yourself"):
+            current_focus = _first_non_empty(education.get("degree"), ", ".join(profile.get("target_roles") or []), "the work in my resume")
+            relevant_skills = _summarize_relevant_skills(job, profile)
+            values["tell_us_about_yourself"] = (
+                "AI draft. Review manually before using.\n\n"
+                f"I'm currently focused on {current_focus}. The parts of my existing background that line up most closely with this role are "
+                f"{relevant_skills}. I would still review and personalize this draft before submitting it."
+            )
 
     salary_policy = _normalize_key_text(question_policy.get("answer_salary_expectation"))
     if salary_policy == "draft_only" and not values.get("salary_expectation"):
@@ -509,11 +610,37 @@ def _prepare_autofill_context(
 
     packet = _packet_or_latest_for_job(db, job_id, packet_id)
     profile_document = load_profile_document()
-    values = build_autofill_values(dict(profile_document.get("profile") or {}), packet, job)
+    profile = dict(profile_document.get("profile") or {})
+    ai_assisted_apply = bool(resolved_options.get("ai_assisted_apply"))
+    include_application_drafts = False
+    ai_drafting_warning: str | None = None
+    if ai_assisted_apply:
+        guard = require_ai_allowed(
+            action="draft_application_answer",
+            user_enabled=True,
+            user_triggered=bool(resolved_options.get("user_triggered", True)),
+        )
+        provider = get_ai_provider()
+        include_application_drafts = bool(guard.get("allowed") and provider.is_available())
+        if not include_application_drafts:
+            ai_drafting_warning = str(guard.get("message") or provider.unavailable_reason or "AI drafting is disabled.")
+    values = build_autofill_values(
+        profile,
+        packet,
+        job,
+        include_application_drafts=include_application_drafts,
+    )
+    if resolved_options.get("fill_sensitive_optional_fields"):
+        for field_key in SENSITIVE_OPTIONAL_FIELD_KEYS:
+            values[field_key] = "Prefer not to answer"
     warnings: list[str] = []
+    if ai_drafting_warning:
+        warnings.append(f"AI disabled - detected long-answer questions will be shown for manual drafting. {ai_drafting_warning}")
 
     if profile_document.get("source") == "example":
         warnings.append("CareerAgent is using the safe example profile. Review every autofill value before using it on a real application.")
+
+    warnings.extend(_email_domain_warnings(values.get("email")))
 
     if packet is None:
         warnings.append("No application packet exists. Generate a packet first to upload tailored resume/cover letter.")
@@ -522,13 +649,24 @@ def _prepare_autofill_context(
     if values.get("resume_upload"):
         files_available.append(str(values["resume_upload"]))
     elif resolved_options.get("allow_base_resume_upload"):
+        if packet is not None:
+            packet_resume_path = _resolve_project_path(packet.tailored_resume_pdf_path)
+        else:
+            packet_resume_path = None
+        if packet is not None and (not packet_resume_path or not packet_resume_path.exists()):
+            warnings.append("Packet exists but resume PDF is missing. Review packet or compile resume before upload.")
         base_resume_upload, compile_warnings = _compile_base_resume_for_upload()
         warnings.extend(compile_warnings)
         if base_resume_upload:
             values["resume_upload"] = base_resume_upload
             files_available.append(base_resume_upload)
+        elif packet is not None and (not packet_resume_path or not packet_resume_path.exists()):
+            values["_resume_upload_status"] = "skipped_packet_pdf_missing"
+        else:
+            values["_resume_upload_status"] = "skipped_no_resume_pdf"
     else:
         warnings.append("No tailored_resume.pdf available. Compile PDF or use manual upload.")
+        values["_resume_upload_status"] = "skipped_no_resume_pdf"
 
     if values.get("cover_letter_upload"):
         files_available.append(str(values["cover_letter_upload"]))
@@ -544,6 +682,7 @@ def _prepare_autofill_context(
         "job": job,
         "packet": packet,
         "profile_document": profile_document,
+        "profile": profile,
         "values": values,
         "files_available": files_available,
         "warnings": warnings,
@@ -624,6 +763,25 @@ def _is_browser_closed_error(exc: Exception) -> bool:
     return any(marker in message for marker in ("target page", "target closed", "has been closed", "context closed", "browser closed"))
 
 
+def _chromium_cache_installed() -> bool:
+    cache_roots = [
+        Path.home() / "Library" / "Caches" / "ms-playwright",
+        Path.home() / ".cache" / "ms-playwright",
+    ]
+    executable_patterns = (
+        "chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium",
+        "chromium-*/chrome-linux/chrome",
+        "chromium-*/chrome-win/chrome.exe",
+    )
+    for root in cache_roots:
+        if not root.exists():
+            continue
+        for pattern in executable_patterns:
+            if any(path.exists() for path in root.glob(pattern)):
+                return True
+    return False
+
+
 def _url_appears_truncated(url: str | None) -> bool:
     normalized = _normalize_text(url)
     return not normalized or "..." in normalized or "…" in normalized
@@ -674,13 +832,18 @@ def _capture_screenshot(page: Any, job_id: int, label: str, warnings: list[str])
 
 @contextmanager
 def _xvfb_session_if_needed(headless: bool | None = None) -> Iterator[None]:
-    process: subprocess.Popen[bytes] | None = None
+    process, previous_display = _start_xvfb_if_needed(headless)
+    try:
+        yield
+    finally:
+        _stop_xvfb_if_needed(process, previous_display)
+
+
+def _start_xvfb_if_needed(headless: bool | None = None) -> tuple[subprocess.Popen[bytes] | None, str | None]:
     previous_display = os.getenv("DISPLAY")
     launch_is_headless = settings.playwright_headless if headless is None else headless
-
     if launch_is_headless or not settings.playwright_use_xvfb or previous_display:
-        yield
-        return
+        return None, previous_display
 
     xvfb_path = shutil.which("Xvfb")
     if not xvfb_path:
@@ -697,19 +860,20 @@ def _xvfb_session_if_needed(headless: bool | None = None) -> Iterator[None]:
         raise AutofillUnavailableError("Xvfb could not start, so headed Chromium has no display available.")
 
     os.environ["DISPLAY"] = display
-    try:
-        yield
-    finally:
-        if previous_display is None:
-            os.environ.pop("DISPLAY", None)
-        else:
-            os.environ["DISPLAY"] = previous_display
-        if process is not None and process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
+    return process, previous_display
+
+
+def _stop_xvfb_if_needed(process: subprocess.Popen[bytes] | None, previous_display: str | None) -> None:
+    if previous_display is None:
+        os.environ.pop("DISPLAY", None)
+    else:
+        os.environ["DISPLAY"] = previous_display
+    if process is not None and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
 
 
 def _get_playwright_support_status() -> dict[str, Any]:
@@ -728,6 +892,8 @@ def _get_playwright_support_status() -> dict[str, Any]:
             "python_executable": sys.executable,
             "backend_runtime": _backend_runtime(),
             "database_host_hint": settings.database_host_hint,
+            "env_file_loaded": getattr(settings, "env_file_loaded", False),
+            "env_path": str(getattr(settings, "env_path", "")),
             "playwright_install_hint": "python -m playwright install chromium",
         }
 
@@ -739,7 +905,7 @@ def _get_playwright_support_status() -> dict[str, Any]:
             executable_path = Path(chromium_executable_path)
             chromium_installed = executable_path.exists()
     except Exception:
-        chromium_installed = False
+        chromium_installed = _chromium_cache_installed()
 
     return {
         "playwright_installed": True,
@@ -753,6 +919,8 @@ def _get_playwright_support_status() -> dict[str, Any]:
         "python_executable": sys.executable,
         "backend_runtime": _backend_runtime(),
         "database_host_hint": settings.database_host_hint,
+        "env_file_loaded": getattr(settings, "env_file_loaded", False),
+        "env_path": str(getattr(settings, "env_path", "")),
         "playwright_install_hint": "python -m playwright install chromium",
         "chromium_executable_path": chromium_executable_path,
     }
@@ -768,9 +936,13 @@ def _resolve_session_mode(options: dict[str, Any]) -> str:
 
 
 def _visible_review_available(support_status: dict[str, Any]) -> bool:
+    if _backend_runtime() == "docker" and settings.playwright_use_xvfb:
+        return False
     return bool(
         not settings.playwright_headless
         and support_status.get("playwright_installed")
+        and support_status.get("chromium_installed")
+        and support_status.get("headed_display_available")
     )
 
 
@@ -1004,27 +1176,47 @@ def get_autofill_status() -> dict[str, Any]:
 
     if not support_status["playwright_installed"]:
         status = "environment_warning"
-    elif browser_mode == "headless" or visible_autofill_available:
+    elif visible_autofill_available:
         status = "ready"
+    elif support_status.get("backend_runtime") == "docker" and settings.playwright_use_xvfb:
+        status = "manual_fallback_ready"
+    elif browser_mode == "headless":
+        status = "manual_fallback_ready"
     else:
         status = "environment_warning"
 
-    if browser_mode == "headless":
+    if support_status.get("backend_runtime") == "docker" and settings.playwright_use_xvfb:
         message = (
-            "CareerAgent is configured for headless diagnostics. Fill Application requires a visible local browser, "
-            "so use Open in Browser or run the backend locally with PLAYWRIGHT_HEADLESS=false."
+            "Docker is running Chromium inside Xvfb, which is not a normal macOS Chromium window. "
+            "For a real Chromium window you can continue from, stop the Docker backend and run the backend locally."
         )
         environment_note = (
-            "Docker on macOS usually has no X server/display, so Docker defaults to PLAYWRIGHT_HEADLESS=true. "
-            "Run the backend locally with PLAYWRIGHT_HEADLESS=false for Fill Application."
+            "Docker containers cannot directly open native macOS browser windows. Use local backend mode for visible autofill."
+        )
+    elif browser_mode == "headless":
+        message = (
+            "CareerAgent is configured for headless diagnostics. Run the backend locally with PLAYWRIGHT_HEADLESS=false "
+            "to enable a real Chromium review window."
+        )
+        environment_note = (
+            "Headless mode is useful for diagnostics, but it cannot be continued manually."
+        )
+    elif support_status.get("backend_runtime") == "docker" and not support_status.get("headed_display_available"):
+        message = (
+            "PLAYWRIGHT_HEADLESS=false was read, but Docker does not have a browser display. "
+            "Set PLAYWRIGHT_USE_XVFB=true and rebuild with docker compose up --build."
+        )
+        environment_note = (
+            "The backend image includes Xvfb. Enable it with PLAYWRIGHT_USE_XVFB=true for Docker autofill."
         )
     else:
         message = (
             "CareerAgent is configured for visible browser autofill. It fills safe high-confidence fields and always stops before final submit."
         )
-        environment_note = (
-            "Headed Chromium requires a display/XServer. If it fails in Docker, set PLAYWRIGHT_HEADLESS=true or run the backend locally outside Docker."
-        )
+        if support_status.get("backend_runtime") == "local":
+            environment_note = "The local backend can open a normal Chromium window for manual review."
+        else:
+            environment_note = "Docker uses Xvfb as a virtual display for Chromium when PLAYWRIGHT_USE_XVFB=true."
 
     return {
         "status": status,
@@ -1107,6 +1299,131 @@ def _detect_apply_actions(page: Any) -> list[str]:
     return list(dict.fromkeys(apply_actions))
 
 
+ACTION_SELECTOR = "button, input[type=submit], input[type=button], a, [role='button'], [role='link']"
+SAFE_START_APPLICATION_EXACT_LABELS = {
+    "apply",
+    "apply now",
+    "apply today",
+    "start application",
+    "begin application",
+}
+SAFE_START_APPLICATION_PHRASES = (
+    "apply for this job",
+    "apply for this position",
+    "apply to this job",
+    "apply to this position",
+    "start your application",
+    "begin your application",
+)
+
+
+def _is_safe_start_application_action(label: str, href: str) -> bool:
+    normalized = _normalize_key_text(label)
+    normalized_href = _normalize_key_text(href)
+    if not normalized and not normalized_href:
+        return False
+    if any(token in normalized for token in ("submit", "confirm", "finish", "send", "complete", "final")):
+        return False
+    if normalized in SAFE_START_APPLICATION_EXACT_LABELS:
+        return True
+    if any(phrase in normalized for phrase in SAFE_START_APPLICATION_PHRASES):
+        return True
+    if normalized == "apply" and any(token in normalized_href for token in ("job", "application", "gh_jid", "lever.co", "greenhouse")):
+        return True
+    return False
+
+
+def _click_safe_start_application_action(page: Any, warnings: list[str]) -> tuple[Any, str | None]:
+    try:
+        raw_actions = page.evaluate(
+            f"""
+            () => Array.from(document.querySelectorAll("{ACTION_SELECTOR}")).map((element, index) => {{
+              const style = window.getComputedStyle(element);
+              const rect = element.getBoundingClientRect();
+              return {{
+                index,
+                text: (element.innerText || element.textContent || element.getAttribute("value") || element.getAttribute("aria-label") || element.getAttribute("title") || "").trim(),
+                href: element.getAttribute("href") || "",
+                type: (element.getAttribute("type") || element.tagName || "").toLowerCase(),
+                disabled: Boolean(element.disabled || element.getAttribute("aria-disabled") === "true"),
+                visible: style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0,
+              }};
+            }})
+            """
+        )
+    except Exception:
+        return page, None
+
+    candidate = None
+    for action in raw_actions:
+        label = _normalize_text(action.get("text")) or _normalize_text(action.get("href")) or "Apply"
+        if not action.get("visible") or action.get("disabled"):
+            continue
+        if action.get("type") == "submit":
+            continue
+        if _is_safe_start_application_action(label, str(action.get("href") or "")):
+            candidate = action
+            break
+    if candidate is None:
+        return page, None
+
+    label = _normalize_text(candidate.get("text")) or _normalize_text(candidate.get("href")) or "Apply"
+    existing_pages = list(page.context.pages)
+    try:
+        page.locator(ACTION_SELECTOR).nth(int(candidate["index"])).click(timeout=5000)
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=5000)
+        except Exception:
+            pass
+        page.wait_for_timeout(1500)
+    except Exception as exc:
+        warnings.append(f"Could not click initial application start action '{label}': {_concise_playwright_error(exc)}")
+        return page, None
+
+    new_pages = [candidate_page for candidate_page in page.context.pages if candidate_page not in existing_pages]
+    next_page = new_pages[-1] if new_pages else page
+    try:
+        next_page.wait_for_load_state("domcontentloaded", timeout=5000)
+    except Exception:
+        pass
+    return next_page, f"Clicked initial application start action '{label}' to reach the form. CareerAgent still did not click final submit."
+
+
+def _detect_form_fields_in_page_or_frame(page: Any, warnings: list[str]) -> tuple[Any, list[dict[str, Any]]]:
+    try:
+        fields = detect_form_fields(page)
+    except Exception:
+        fields = []
+    if fields:
+        return page, fields
+
+    for frame in page.frames:
+        if frame == page.main_frame:
+            continue
+        try:
+            frame_fields = detect_form_fields(frame)
+        except Exception:
+            continue
+        if frame_fields:
+            warnings.append(f"Detected application form fields inside embedded frame: {frame.url}")
+            return frame, frame_fields
+    return page, []
+
+
+def _combined_detected_actions(page: Any, form_context: Any, detector: Any) -> list[str]:
+    actions: list[str] = []
+    for context in (page, form_context):
+        if context is None:
+            continue
+        try:
+            for action in detector(context):
+                if action not in actions:
+                    actions.append(action)
+        except Exception:
+            continue
+    return actions
+
+
 def _detect_blocked_actions(page: Any) -> list[str]:
     raw_actions = page.evaluate(
         """
@@ -1135,6 +1452,18 @@ def _choose_select_option(option_texts: list[str], desired_value: Any) -> str | 
         return None
 
     normalized_value = _normalize_key_text(desired_value)
+    if normalized_value in {"prefer not to answer", "prefer not", "decline", "decline to self-identify", "decline to self identify"}:
+        decline_tokens = (
+            "decline to self-identify",
+            "decline to self identify",
+            "prefer not to answer",
+            "prefer not to say",
+            "do not wish to answer",
+            "choose not to answer",
+        )
+        for option, normalized in zip(option_texts, normalized_options, strict=False):
+            if any(token in normalized for token in decline_tokens):
+                return option
     for option, normalized in zip(option_texts, normalized_options, strict=False):
         if normalized == normalized_value:
             return option
@@ -1183,6 +1512,11 @@ def _apply_value_to_field(page: Any, field: dict[str, Any], desired_value: Any) 
     if input_type in {"radio", "checkbox"}:
         if not isinstance(desired_value, bool):
             return False, "Boolean answer required for radio or checkbox fields."
+        if field_key == "future_job_opportunities_consent":
+            if not desired_value:
+                return False, "Future opportunities consent is disabled in profile preferences."
+            locator.check()
+            return True, "Selected future opportunities consent."
         if not _choice_matches_boolean(field, desired_value):
             return False, "This option does not match the desired yes/no answer."
         locator.check()
@@ -1196,13 +1530,208 @@ def _apply_value_to_field(page: Any, field: dict[str, Any], desired_value: Any) 
     return True, "Filled text field."
 
 
+def _build_application_answer_prompt(*, field: dict[str, Any], job: Job, profile: dict[str, Any]) -> str:
+    question_text = _field_label(field)
+    profile_context = {
+        "personal": dict(profile.get("personal") or {}),
+        "education": dict(profile.get("education") or {}),
+        "links": dict(profile.get("links") or {}),
+        "skills": list(profile.get("skills") or []),
+        "target_roles": list(profile.get("target_roles") or []),
+        "application_defaults": dict(profile.get("application_defaults") or {}),
+        "writing_style": dict(profile.get("writing_style") or {}),
+    }
+    return "\n\n".join(
+        [
+            "Draft one concise, truthful application-form answer for the exact question below.",
+            "Return only the answer text. Do not include markdown headings.",
+            "Mark the first line exactly: AI draft. Review manually before using.",
+            "Do not give a blanket attestation such as 'my responses reflect my own understanding' as the whole answer.",
+            "If the field contains several numbered subquestions, answer each numbered part directly in order.",
+            "Do not invent personal experience, employers, credentials, baseball R&D experience, demographics, or work authorization facts.",
+            "For technical, math, statistics, or baseball-domain questions, reason through the question directly and show work when useful.",
+            "If the answer depends on missing personal facts, say REVIEW MANUALLY for that part instead of guessing.",
+            "Never submit the application.",
+            f"Question category: {field.get('question_category') or 'unknown_long_answer'}",
+            f"Question: {question_text}",
+            "Job:",
+            (
+                f"Company: {job.company}\n"
+                f"Title: {job.title}\n"
+                f"Location: {job.location}\n"
+                f"Description: {_normalize_text(job.job_description)[:3500]}"
+            ),
+            f"Profile context: {profile_context}",
+        ]
+    )
+
+
+def _mock_application_answer(field: dict[str, Any], job: Job) -> str:
+    question = _normalize_key_text(_field_label(field))
+    prefix = "AI draft. Review manually before using.\n\n"
+    if "a-grade" in question and "exactly four possible values" in question and "312 pa" in question:
+        return (
+            prefix +
+            "1. Let A be A-grade. Prior odds are 0.30 / 0.70 = 0.429. The game has 2 extra-base hits in 4 at-bats. With binomial xBH rates of 10% vs. 8%, "
+            "LR = (0.10^2 * 0.90^2) / (0.08^2 * 0.92^2) ≈ 1.50, so posterior odds are 0.64 and posterior probability is about 39%. This is highly sensitive to the assumed xBH rates and the one-game sample.\n\n"
+            "2a. Treat N + 0.1 as N and one out, or N + 1/3 true innings. ERA = 9E / (N + 1/3), and ERA between 3 and 4 means (N + 1/3)/3 < E < 4(N + 1/3)/9. "
+            "Count integer E values in that open interval and choose the first N with exactly four. REVIEW MANUALLY: enumerate the boundary cases to confirm the final integer.\n\n"
+            "2b. The interval length is (1/9)(M + 1/3). To guarantee at least four integer earned-run totals for every M >= N, check the finite set of M modulo 9 around the first width threshold and then use monotonicity. REVIEW MANUALLY: confirm the exact threshold by enumeration.\n\n"
+            "3a. A .286 average with .350 BABIP, only 3 HR, and a 55% groundball rate suggests the line is driven by balls in play more than game power. I would be more confident in contact/speed traits than in power, and I would regress BABIP without quality-of-contact support.\n\n"
+            "3b. With a 55% flyball rate instead, the same line is less groundball/speed driven and more dependent on airborne contact quality. Only 3 HR could be either under-realized power or weak fly-ball contact; sustainability depends heavily on exit velocity, pull rate, popups, and HR/FB."
+        )
+    if "a-grade" in question or ("30%" in question and "xbh" in question) or "xBH" in _field_label(field):
+        return (
+            prefix +
+            "1. Let A be A-grade. Prior odds are 0.30 / 0.70 = 0.429. The observed game has 2 extra-base hits in 4 at-bats. "
+            "Using a binomial likelihood with xBH rates 10% for A-grade and 8% otherwise, the likelihood ratio is "
+            "(0.10^2 * 0.90^2) / (0.08^2 * 0.92^2) ≈ 1.50. Posterior odds are 0.429 * 1.50 = 0.64, so posterior probability is about 0.64 / 1.64 = 39%. "
+            "This is very sensitive to the assumed xBH rates and ignores quality of contact, park, opponent, and tiny-sample noise; one game should move the estimate only modestly."
+        )
+    if "bayesian" in question or "xbh" in question or "draft" in question:
+        return (
+            prefix +
+            "Mock technical draft: State the prior probability, define the observed first-game evidence, estimate the likelihood of that evidence under each player-quality hypothesis, then update with Bayes' rule. "
+            "I would make the posterior explicit and note that one game is weak evidence unless the xBH-rate model assigns a much higher likelihood to the observed result for successful draftees."
+        )
+    if "n + 0.1" in question and "exactly four possible values" in question:
+        return (
+            prefix +
+            "2a. Innings listed as N + 0.1 means N and one out, or N + 1/3 true innings. ERA = 9E / (N + 1/3). "
+            "With ERA between 3 and 4, E must satisfy (N + 1/3)/3 < E < 4(N + 1/3)/9. The number of possible ERA values is the number of integers E in that open interval. "
+            "I would enumerate the boundary values of N and choose the first N where exactly four integer earned-run totals fit. REVIEW MANUALLY: verify the boundary convention for 'between' and decimal baseball innings."
+        )
+    if "for all m" in question or ("smallest value n" in question and "at least four" in question):
+        return (
+            prefix +
+            "2b. Use the same integer-count framing as 2a. The interval length is (4/9 - 1/3)(M + 1/3) = (1/9)(M + 1/3). "
+            "To guarantee at least four integer E values for every M >= N, the interval must be wide enough and aligned so the worst-case endpoints still contain four integers. "
+            "I would solve this by checking the finite set of M modulo 9 around the first width threshold, then prove monotonicity after that point. REVIEW MANUALLY: confirm the final numeric N by enumeration."
+        )
+    if "312 pa" in question and "55% groundball" in question:
+        return (
+            prefix +
+            "3a. The .286 average with a .350 BABIP and only 3 HR suggests much of the line is being carried by balls in play rather than game power. "
+            "With 312 PA, I would be fairly confident the hitter has shown some bat-to-ball ability or speed/contact traits, but less confident that the average is sustainable without batted-ball quality details. "
+            "The 55% groundball rate reinforces limited over-the-fence power and caps slugging upside unless the hitter hits the ball extremely hard. I would regress BABIP and power projections toward scouting/trackman inputs."
+        )
+    if "55% flyball" in question or "55% fly ball" in question:
+        return (
+            prefix +
+            "3b. A 55% flyball rate changes the interpretation: with the same .286 AVG, .350 BABIP, and only 3 HR, the hitter may be producing a lot of airborne contact that has not turned into home runs. "
+            "That can be promising if exit velocity and pull-side contact are strong, but risky if the fly balls are weak or popups. I would be less comfortable projecting the batting average from BABIP alone and would focus on quality of contact, HR/FB, park, and strikeout trends."
+        )
+    if "minimum value of n" in question or "smallest n" in question or "era" in question:
+        return (
+            prefix +
+            "Mock math draft: Treat ERA as 9 * earned runs / innings pitched. Enumerate the feasible earned-run and innings-pitched values implied by the prompt, then choose the smallest N that makes the displayed/rounded ERA condition true."
+        )
+    if "hitter" in question or "flyball" in question or "fly ball" in question:
+        return (
+            prefix +
+            "Mock baseball-statistics draft: Separate rate stats from batted-ball profile. The same slash line can hide very different underlying skill signals; adding fly-ball rate changes the inference about power, contact quality, and sustainability."
+        )
+    return (
+        prefix +
+        f"MockProvider draft for {job.company} {job.title}. Replace this with a reviewed answer grounded in the exact question and your real background before submitting."
+    )
+
+
+def _is_unusable_application_draft(answer: str, field: dict[str, Any]) -> bool:
+    normalized_answer = _normalize_key_text(answer)
+    normalized_question = _normalize_key_text(_field_label(field))
+    if len(normalized_answer) < 80:
+        return True
+    generic_phrases = (
+        "my responses below reflect my own understanding",
+        "prepared to discuss them in depth",
+        "i agree",
+        "review manually before using." ,
+    )
+    if any(phrase in normalized_answer for phrase in generic_phrases) and not any(
+        token in normalized_answer
+        for token in ("posterior", "prior", "era", "babip", "flyball", "groundball", "xbh", "bayes", "likelihood")
+    ):
+        return True
+    technical_tokens = [token for token in ("xbh", "a-grade", "era", "babip", "groundball", "flyball", "posterior") if token in normalized_question]
+    if technical_tokens and not any(token in normalized_answer for token in technical_tokens):
+        return True
+    return False
+
+
+def _draft_application_answer_for_field(
+    *,
+    field: dict[str, Any],
+    job: Job,
+    profile: dict[str, Any],
+    user_triggered: bool,
+    warnings: list[str],
+) -> tuple[str | None, str, str | None]:
+    guard = require_ai_allowed(
+        action="draft_application_answer",
+        user_enabled=True,
+        user_triggered=user_triggered,
+    )
+    provider_name = str(guard.get("provider") or "unknown")
+    if not guard.get("allowed"):
+        return None, str(guard.get("message") or "AI drafting is disabled."), provider_name
+
+    provider = get_ai_provider()
+    if not provider.is_available():
+        return None, provider.unavailable_reason or f"{provider.name} provider is unavailable.", provider.name
+
+    if provider.name == "mock":
+        warnings.append("MockProvider is active. Long-answer application drafts are deterministic placeholders for testing.")
+        return _mock_application_answer(field, job), "AI-assisted mock technical answer drafted.", provider.name
+
+    result = provider.generate_text(
+        "draft_application_answer",
+        _build_application_answer_prompt(field=field, job=job, profile=profile),
+        context={
+            "job": {
+                "id": job.id,
+                "company": job.company,
+                "title": job.title,
+                "description": job.job_description,
+            },
+            "profile": profile,
+            "question": _field_label(field),
+            "question_category": field.get("question_category"),
+            "api_action": "draft_application_answer",
+            "user_enabled": True,
+            "user_triggered": user_triggered,
+        },
+    )
+    warnings.extend(str(warning) for warning in list(result.get("warnings") or []) if warning)
+    if not result.get("success"):
+        fallback = _mock_application_answer(field, job)
+        warnings.append(f"{provider.name} could not draft this long answer, so CareerAgent inserted a review-required technical fallback.")
+        return fallback, f"{provider.name} failed; review-required technical fallback drafted.", provider.name
+    answer = str(result.get("content") or "").strip()
+    if not answer:
+        fallback = _mock_application_answer(field, job)
+        warnings.append(f"{provider.name} returned an empty long-answer draft, so CareerAgent inserted a review-required technical fallback.")
+        return fallback, f"{provider.name} returned empty content; review-required technical fallback drafted.", provider.name
+    if "review manually before using" not in answer.lower():
+        answer = f"AI draft. Review manually before using.\n\n{answer}"
+    if _is_unusable_application_draft(answer, field):
+        fallback = _mock_application_answer(field, job)
+        warnings.append(f"{provider.name} returned a generic or incomplete long-answer draft, so CareerAgent inserted a review-required technical fallback.")
+        return fallback, f"{provider.name} generic draft replaced with review-required technical fallback.", provider.name
+    return answer, f"AI-assisted {field.get('question_category') or 'long-answer'} answer drafted.", provider.name
+
+
 def _fill_safe_fields(
     *,
     page: Any,
     fields_detected: list[dict[str, Any]],
     values: dict[str, Any],
+    job: Job,
+    profile: dict[str, Any],
     warnings: list[str],
     allow_sensitive_optional: bool,
+    ai_assisted_apply: bool,
+    user_triggered: bool,
     headless: bool,
     playwright_error_type: Any,
 ) -> tuple[list[dict[str, Any]], int, int, list[str]]:
@@ -1217,77 +1746,100 @@ def _fill_safe_fields(
 
     for field in fields_detected:
         field_key = str(field.get("field_key") or "unknown_question")
-        label = _first_non_empty(field.get("label_text"), field.get("placeholder"), field.get("name"), field.get("id"), field_key)
+        label = _field_label(field)
         confidence = float(field.get("confidence") or 0.0)
         value = values.get(field_key)
         safe_to_fill = bool(field.get("safe_to_fill"))
+        category = str(field.get("question_category") or field.get("safe_category") or field_key)
 
-        if field_key in SKIPPED_ALWAYS_FIELD_KEYS:
+        def append_result(
+            *,
+            filled: bool,
+            action: str,
+            reason: str,
+            result_value: Any = None,
+            provider: str | None = None,
+        ) -> None:
             field_results.append(
                 {
                     "field_key": field_key,
                     "label": label,
+                    "question": field.get("question_text") or label,
+                    "category": category,
+                    "action": action,
                     "selector": field.get("selector"),
-                    "filled": False,
+                    "filled": filled,
                     "confidence": confidence,
-                    "reason": "Sensitive field skipped by policy.",
+                    "value_preview": _preview_value(result_value),
+                    "value": str(result_value) if action == "filled_ai_draft_review_required" and result_value not in (None, "", []) else None,
+                    "reason": reason,
+                    "provider": provider,
+                    "review_required": action == "filled_ai_draft_review_required",
                 }
             )
+
+        if field_key in SKIPPED_ALWAYS_FIELD_KEYS:
+            append_result(filled=False, action="skipped", reason="Sensitive field skipped by policy.")
             continue
 
         if field_key in SENSITIVE_OPTIONAL_FIELD_KEYS and not allow_sensitive_optional:
-            field_results.append(
-                {
-                    "field_key": field_key,
-                    "label": label,
-                    "selector": field.get("selector"),
-                    "filled": False,
-                    "confidence": confidence,
-                    "reason": "Sensitive optional field skipped unless explicitly enabled.",
-                }
-            )
+            append_result(filled=False, action="skipped", reason="Sensitive optional field skipped unless explicitly enabled.")
             continue
 
         if field_key in SENSITIVE_OPTIONAL_FIELD_KEYS and allow_sensitive_optional:
             safe_to_fill = True
 
-        if not safe_to_fill:
-            field_results.append(
-                {
-                    "field_key": field_key,
-                    "label": label,
-                    "selector": field.get("selector"),
-                    "filled": False,
-                    "confidence": confidence,
-                    "reason": str(field.get("reason") or "Field not considered safe to autofill."),
-                }
+        if field_key in LONG_ANSWER_FIELD_KEYS and ai_assisted_apply and field_key != "general_cover_letter":
+            # Live application questions need answers grounded in the exact
+            # detected prompt. Packet-level generic drafts are too broad for
+            # technical forms such as Lever R&D questions.
+            value = None
+
+        if field_key in LONG_ANSWER_FIELD_KEYS and value in (None, "", []):
+            if not ai_assisted_apply:
+                append_result(
+                    filled=False,
+                    action="skipped",
+                    reason="Skipped long-answer question: AI-assisted apply required.",
+                )
+                continue
+            value, draft_reason, provider_name = _draft_application_answer_for_field(
+                field=field,
+                job=job,
+                profile=profile,
+                user_triggered=user_triggered,
+                warnings=warnings,
             )
+            if value in (None, "", []):
+                append_result(
+                    filled=False,
+                    action="skipped",
+                    reason=f"AI disabled or unavailable - draft manually or enable AI. {draft_reason}",
+                    provider=provider_name,
+                )
+                continue
+
+        if not safe_to_fill:
+            append_result(filled=False, action="skipped", reason=str(field.get("reason") or "Field not considered safe to autofill."))
             continue
 
-        if confidence < HIGH_CONFIDENCE_THRESHOLD:
-            field_results.append(
-                {
-                    "field_key": field_key,
-                    "label": label,
-                    "selector": field.get("selector"),
-                    "filled": False,
-                    "confidence": confidence,
-                    "reason": "Confidence below the Stage 8 autofill threshold.",
-                }
-            )
+        if confidence < HIGH_CONFIDENCE_THRESHOLD and not (field_key in LONG_ANSWER_FIELD_KEYS and ai_assisted_apply):
+            append_result(filled=False, action="skipped", reason="Confidence below the autofill threshold.")
             continue
 
         if value in (None, "", []):
-            field_results.append(
-                {
-                    "field_key": field_key,
-                    "label": label,
-                    "selector": field.get("selector"),
-                    "filled": False,
-                    "confidence": confidence,
-                    "reason": "No truthful value was available for this field.",
-                }
-            )
+            if field_key == "current_company":
+                reason = "No current company in profile."
+            elif field_key == "current_location":
+                reason = "No profile location found."
+            elif field_key == "pronouns":
+                reason = "No pronouns configured in profile."
+            elif field_key == "resume_upload":
+                resume_status = str(values.get("_resume_upload_status") or "skipped_no_resume_pdf")
+                reason = "skipped_packet_pdf_missing" if resume_status == "skipped_packet_pdf_missing" else "skipped_no_resume_pdf"
+            else:
+                reason = "No truthful value was available for this field."
+            append_result(filled=False, action=reason if field_key == "resume_upload" else "skipped", reason=reason)
             continue
 
         try:
@@ -1302,16 +1854,19 @@ def _fill_safe_fields(
             if field_key in {"resume_upload", "cover_letter_upload"}:
                 files_uploaded.append(Path(str(value)).name)
 
-        field_results.append(
-            {
-                "field_key": field_key,
-                "label": label,
-                "selector": field.get("selector"),
-                "filled": filled,
-                "confidence": confidence,
-                "reason": reason,
-            }
-        )
+        if filled and field_key in LONG_ANSWER_FIELD_KEYS and ai_assisted_apply:
+            action = "filled_ai_draft_review_required"
+        elif filled and field_key in {"resume_upload", "cover_letter_upload"}:
+            action = "uploaded"
+            if field_key == "resume_upload":
+                reason = "uploaded_resume_pdf"
+        elif filled:
+            action = "filled"
+        else:
+            action = "skipped"
+            if field_key == "resume_upload" and "not found" in reason.lower():
+                reason = "skipped_no_resume_pdf"
+        append_result(filled=filled, action=action, reason=reason, result_value=value)
 
     return field_results, fields_filled, fields_attempted, files_uploaded
 
@@ -1322,6 +1877,7 @@ def _start_visible_review_session(
     job: Job,
     packet: ApplicationPacket | None,
     values: dict[str, Any],
+    profile: dict[str, Any],
     manual_values: list[dict[str, str]],
     warnings: list[str],
     resolved_options: dict[str, Any],
@@ -1334,6 +1890,8 @@ def _start_visible_review_session(
     browser: Any | None = None
     context_manager: Any | None = None
     page: Any | None = None
+    xvfb_process: subprocess.Popen[bytes] | None = None
+    previous_display: str | None = None
     started_logged = False
     session_stored = False
     fields_detected: list[dict[str, Any]] = []
@@ -1358,34 +1916,62 @@ def _start_visible_review_session(
         return summary
 
     try:
-        with _xvfb_session_if_needed(False):
-            playwright_manager = sync_playwright()
-            playwright = playwright_manager.start()
-            browser = playwright.chromium.launch(
-                headless=False,
-                slow_mo=settings.playwright_slow_mo_ms,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
-            )
-            context_manager = browser.new_context()
-            page = context_manager.new_page()
+        xvfb_process, previous_display = _start_xvfb_if_needed(False)
+        playwright_manager = sync_playwright()
+        playwright = playwright_manager.start()
+        browser = playwright.chromium.launch(
+            headless=False,
+            slow_mo=settings.playwright_slow_mo_ms,
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+        )
+        context_manager = browser.new_context()
+        page = context_manager.new_page()
 
-            promote_job_status_if_needed(db, job.id, "autofill_started", notes="Started a visible browser autofill session.")
-            db.refresh(job)
+        promote_job_status_if_needed(db, job.id, "autofill_started", notes="Started a visible browser autofill session.")
+        db.refresh(job)
+        log_event(
+            db,
+            job_id=job.id,
+            packet_id=packet.id if packet else None,
+            event_type="autofill_started",
+            notes="Started a visible browser autofill session.",
+            old_status=initial_status,
+            new_status=job.application_status,
+            metadata_json={"url": job.url, "packet_id": packet.id if packet else None, "session_mode": "visible_review"},
+        )
+        started_logged = True
+
+        try:
+            response = page.goto(_browser_navigation_url(job.url), wait_until="domcontentloaded", timeout=settings.autofill_navigation_timeout_ms)
+        except playwright_timeout_error_type as exc:
+            summary = _classify_navigation_failure_summary(
+                job=job,
+                packet=packet,
+                warnings=warnings,
+                manual_values=manual_values,
+                error_text=str(exc),
+            )
             log_event(
                 db,
                 job_id=job.id,
                 packet_id=packet.id if packet else None,
-                event_type="autofill_started",
-                notes="Started a visible browser autofill session.",
+                event_type="autofill_navigation_failed",
+                notes=summary["message"],
                 old_status=initial_status,
                 new_status=job.application_status,
-                metadata_json={"url": job.url, "packet_id": packet.id if packet else None, "session_mode": "visible_review"},
+                metadata_json={"url": job.url, "status": summary["status"], "details": summary.get("details")},
             )
-            started_logged = True
-
-            try:
-                response = page.goto(_browser_navigation_url(job.url), wait_until="domcontentloaded", timeout=settings.autofill_navigation_timeout_ms)
-            except playwright_timeout_error_type as exc:
+            save_session_summary(summary)
+            return summary
+        except playwright_error_type as exc:
+            if _is_browser_closed_error(exc):
+                summary = _browser_closed_summary(
+                    job=job,
+                    packet=packet,
+                    warnings=warnings,
+                    manual_values=manual_values,
+                )
+            else:
                 summary = _classify_navigation_failure_summary(
                     job=job,
                     packet=packet,
@@ -1393,196 +1979,181 @@ def _start_visible_review_session(
                     manual_values=manual_values,
                     error_text=str(exc),
                 )
-                log_event(
-                    db,
-                    job_id=job.id,
-                    packet_id=packet.id if packet else None,
-                    event_type="autofill_navigation_failed",
-                    notes=summary["message"],
-                    old_status=initial_status,
-                    new_status=job.application_status,
-                    metadata_json={"url": job.url, "status": summary["status"], "details": summary.get("details")},
-                )
-                save_session_summary(summary)
-                return summary
-            except playwright_error_type as exc:
-                if _is_browser_closed_error(exc):
-                    summary = _browser_closed_summary(
-                        job=job,
-                        packet=packet,
-                        warnings=warnings,
-                        manual_values=manual_values,
-                    )
-                else:
-                    summary = _classify_navigation_failure_summary(
-                        job=job,
-                        packet=packet,
-                        warnings=warnings,
-                        manual_values=manual_values,
-                        error_text=str(exc),
-                    )
-                log_event(
-                    db,
-                    job_id=job.id,
-                    packet_id=packet.id if packet else None,
-                    event_type="autofill_navigation_failed",
-                    notes=summary["message"],
-                    old_status=initial_status,
-                    new_status=job.application_status,
-                    metadata_json={"url": job.url, "status": summary["status"], "details": summary.get("details")},
-                )
-                save_session_summary(summary)
-                return summary
-
-            if response is not None and response.status >= 400:
-                summary = _classify_navigation_failure_summary(
-                    job=job,
-                    packet=packet,
-                    warnings=warnings,
-                    manual_values=manual_values,
-                    error_text=f"HTTP {response.status} while loading {job.url}",
-                    response_status=response.status,
-                )
-                log_event(
-                    db,
-                    job_id=job.id,
-                    packet_id=packet.id if packet else None,
-                    event_type="autofill_navigation_failed",
-                    notes=summary["message"],
-                    old_status=initial_status,
-                    new_status=job.application_status,
-                    metadata_json={"url": job.url, "status": summary["status"], "http_status": response.status},
-                )
-                save_session_summary(summary)
-                return summary
-
-            warnings.extend(_detect_page_warnings(page))
-            fields_detected = detect_form_fields(page)
-            blocked_actions = _detect_blocked_actions(page)
-            apply_actions = _detect_apply_actions(page)
-            for action in apply_actions:
-                if action not in blocked_actions:
-                    blocked_actions.append(action)
-
-            if _is_workday_url(job.url):
-                warnings.append(
-                    "This appears to be a Workday job page. Workday job-detail pages often do not expose application form fields until the user proceeds manually."
-                )
-
-            if fields_detected:
-                field_results, fields_filled, fields_attempted, files_uploaded = _fill_safe_fields(
-                    page=page,
-                    fields_detected=fields_detected,
-                    values=values,
-                    warnings=warnings,
-                    allow_sensitive_optional=bool(resolved_options.get("fill_sensitive_optional_fields")),
-                    headless=False,
-                    playwright_error_type=playwright_error_type,
-                )
-            else:
-                if _is_workday_url(job.url) and apply_actions:
-                    warnings.append("An Apply button or link was found on this Workday page, but CareerAgent did not click it automatically.")
-                warnings.append(NO_FIELDS_REASON)
-
-            autofill_effective = fields_filled > 0 or bool(files_uploaded)
-            if fields_detected and not autofill_effective:
-                warnings.append(
-                    "CareerAgent detected fields but did not safely fill any of them. Review the field results and try the local test form or a direct application form URL."
-                )
-
-            session = create_session(
-                browser=browser,
-                context=context_manager,
-                page=page,
-                job_id=job.id,
-                opened_url=page.url,
-                mode="visible_review",
-                playwright_manager=playwright_manager,
-            )
-            session_stored = True
-            session_id = session["session_id"]
-
-            if not fields_detected:
-                summary_status = "no_fields_detected"
-                success = False
-                message = NO_FIELDS_MESSAGE
-                recommended_next_action = (
-                    "Open this Workday job in your default browser and proceed manually to the application form, "
-                    "or save the direct application form URL in CareerAgent."
-                    if _is_workday_url(job.url)
-                    else NO_FIELDS_NEXT_ACTION
-                )
-                event_type = "autofill_no_fields_detected"
-                event_notes = NO_FIELDS_MESSAGE
-            elif autofill_effective:
-                summary_status = "visible_session_started"
-                success = True
-                message = VISIBLE_SESSION_MESSAGE
-                recommended_next_action = "continue_in_visible_browser"
-                event_type = "autofill_completed"
-                event_notes = "Completed a visible browser autofill session and left the browser open for manual review."
-                promote_job_status_if_needed(db, job.id, "autofill_completed", notes=event_notes)
-                db.refresh(job)
-            else:
-                summary_status = "no_fields_filled"
-                success = False
-                message = "CareerAgent opened the form and detected fields, but it did not safely fill any values."
-                recommended_next_action = "Review the field results, generate a packet if files are missing, or continue manually in the visible browser."
-                event_type = "autofill_no_fields_filled"
-                event_notes = "Detected fields but did not safely fill any values."
-
-            summary = {
-                "success": success,
-                "autofill_effective": autofill_effective,
-                "can_continue_in_browser": True,
-                "job_id": job.id,
-                "packet_id": packet.id if packet else None,
-                "status": summary_status,
-                "mode": "visible_review",
-                "session_mode": "visible_review",
-                "session_id": session_id,
-                "browser_mode": "headed",
-                "opened_url": page.url,
-                "fields_detected": len(fields_detected),
-                "fields_filled": fields_filled,
-                "fields_skipped": max(len(fields_detected) - fields_filled, 0),
-                "files_uploaded": files_uploaded,
-                "blocked_actions": blocked_actions,
-                "warnings": warnings,
-                "manual_review_required": True,
-                "message": message,
-                "no_fields_reason": NO_FIELDS_REASON if not fields_detected else None,
-                "recommended_next_action": recommended_next_action,
-                "screenshot_path": None,
-                "screenshot_url": None,
-                "manual_values": manual_values,
-                "field_results": field_results,
-            }
-
             log_event(
                 db,
                 job_id=job.id,
                 packet_id=packet.id if packet else None,
-                event_type=event_type,
-                notes=event_notes,
+                event_type="autofill_navigation_failed",
+                notes=summary["message"],
                 old_status=initial_status,
                 new_status=job.application_status,
-                metadata_json={
-                    "browser_mode": summary["browser_mode"],
-                    "opened_url": summary["opened_url"],
-                    "session_id": session_id,
-                    "session_mode": "visible_review",
-                    "can_continue_in_browser": True,
-                    "fields_detected": summary["fields_detected"],
-                    "fields_filled": summary["fields_filled"],
-                    "fields_attempted": fields_attempted,
-                    "files_uploaded": summary["files_uploaded"],
-                    "blocked_actions": summary["blocked_actions"],
-                    "application_status_advanced": bool(autofill_effective),
-                },
+                metadata_json={"url": job.url, "status": summary["status"], "details": summary.get("details")},
             )
             save_session_summary(summary)
             return summary
+
+        if response is not None and response.status >= 400:
+            summary = _classify_navigation_failure_summary(
+                job=job,
+                packet=packet,
+                warnings=warnings,
+                manual_values=manual_values,
+                error_text=f"HTTP {response.status} while loading {job.url}",
+                response_status=response.status,
+            )
+            log_event(
+                db,
+                job_id=job.id,
+                packet_id=packet.id if packet else None,
+                event_type="autofill_navigation_failed",
+                notes=summary["message"],
+                old_status=initial_status,
+                new_status=job.application_status,
+                metadata_json={"url": job.url, "status": summary["status"], "http_status": response.status},
+            )
+            save_session_summary(summary)
+            return summary
+
+        warnings.extend(_detect_page_warnings(page))
+        form_context, fields_detected = _detect_form_fields_in_page_or_frame(page, warnings)
+        if not fields_detected and not _is_workday_url(job.url):
+            page, start_action_message = _click_safe_start_application_action(page, warnings)
+            if start_action_message:
+                warnings.append(start_action_message)
+                warnings.extend(_detect_page_warnings(page))
+                form_context, fields_detected = _detect_form_fields_in_page_or_frame(page, warnings)
+        blocked_actions = _combined_detected_actions(page, form_context, _detect_blocked_actions)
+        apply_actions = _combined_detected_actions(page, form_context, _detect_apply_actions)
+        for action in apply_actions:
+            if action not in blocked_actions:
+                blocked_actions.append(action)
+
+        if _is_workday_url(job.url):
+            warnings.append(
+                "This appears to be a Workday job page. Workday job-detail pages often do not expose application form fields until the user proceeds manually."
+            )
+
+        if fields_detected:
+            field_results, fields_filled, fields_attempted, files_uploaded = _fill_safe_fields(
+                page=form_context,
+                fields_detected=fields_detected,
+                values=values,
+                job=job,
+                profile=profile,
+                warnings=warnings,
+                allow_sensitive_optional=bool(resolved_options.get("fill_sensitive_optional_fields")),
+                ai_assisted_apply=bool(resolved_options.get("ai_assisted_apply")),
+                user_triggered=bool(resolved_options.get("user_triggered", True)),
+                headless=False,
+                playwright_error_type=playwright_error_type,
+            )
+        else:
+            if _is_workday_url(job.url) and apply_actions:
+                warnings.append("An Apply button or link was found on this Workday page, but CareerAgent did not click it automatically.")
+            warnings.append(NO_FIELDS_REASON)
+
+        autofill_effective = fields_filled > 0 or bool(files_uploaded)
+        if fields_detected and not autofill_effective:
+            warnings.append(
+                "CareerAgent detected fields but did not safely fill any of them. Review the field results and try the local test form or a direct application form URL."
+            )
+
+        session = create_session(
+            browser=browser,
+            context=context_manager,
+            page=page,
+            job_id=job.id,
+            opened_url=page.url,
+            mode="visible_review",
+            playwright_manager=playwright_manager,
+            xvfb_process=xvfb_process,
+            previous_display=previous_display,
+        )
+        xvfb_process = None
+        session_stored = True
+        session_id = session["session_id"]
+
+        if not fields_detected:
+            summary_status = "no_fields_detected"
+            success = False
+            message = NO_FIELDS_MESSAGE
+            recommended_next_action = (
+                "Open this Workday job in your default browser and proceed manually to the application form, "
+                "or save the direct application form URL in CareerAgent."
+                if _is_workday_url(job.url)
+                else NO_FIELDS_NEXT_ACTION
+            )
+            event_type = "autofill_no_fields_detected"
+            event_notes = NO_FIELDS_MESSAGE
+        elif autofill_effective:
+            summary_status = "visible_session_started"
+            success = True
+            message = VISIBLE_SESSION_MESSAGE
+            recommended_next_action = "continue_in_visible_browser"
+            event_type = "autofill_completed"
+            event_notes = "Completed a visible browser autofill session and left the browser open for manual review."
+            promote_job_status_if_needed(db, job.id, "autofill_completed", notes=event_notes)
+            db.refresh(job)
+        else:
+            summary_status = "no_fields_filled"
+            success = False
+            message = "CareerAgent opened the form and detected fields, but it did not safely fill any values."
+            recommended_next_action = "Review the field results, generate a packet if files are missing, or continue manually in the visible browser."
+            event_type = "autofill_no_fields_filled"
+            event_notes = "Detected fields but did not safely fill any values."
+
+        summary = {
+            "success": success,
+            "autofill_effective": autofill_effective,
+            "can_continue_in_browser": True,
+            "job_id": job.id,
+            "packet_id": packet.id if packet else None,
+            "status": summary_status,
+            "mode": "visible_review",
+            "session_mode": "visible_review",
+            "session_id": session_id,
+            "browser_mode": "headed",
+            "opened_url": page.url,
+            "fields_detected": len(fields_detected),
+            "fields_filled": fields_filled,
+            "fields_skipped": max(len(fields_detected) - fields_filled, 0),
+            "files_uploaded": files_uploaded,
+            "blocked_actions": blocked_actions,
+            "warnings": warnings,
+            "manual_review_required": True,
+            "message": message,
+            "no_fields_reason": NO_FIELDS_REASON if not fields_detected else None,
+            "recommended_next_action": recommended_next_action,
+            "screenshot_path": None,
+            "screenshot_url": None,
+            "manual_values": manual_values,
+            "field_results": field_results,
+        }
+
+        log_event(
+            db,
+            job_id=job.id,
+            packet_id=packet.id if packet else None,
+            event_type=event_type,
+            notes=event_notes,
+            old_status=initial_status,
+            new_status=job.application_status,
+            metadata_json={
+                "browser_mode": summary["browser_mode"],
+                "opened_url": summary["opened_url"],
+                "session_id": session_id,
+                "session_mode": "visible_review",
+                "can_continue_in_browser": True,
+                "fields_detected": summary["fields_detected"],
+                "fields_filled": summary["fields_filled"],
+                "fields_attempted": fields_attempted,
+                "files_uploaded": summary["files_uploaded"],
+                "blocked_actions": summary["blocked_actions"],
+                "application_status_advanced": bool(autofill_effective),
+            },
+        )
+        save_session_summary(summary)
+        return summary
     except AutofillError:
         raise
     except playwright_error_type as exc:
@@ -1666,6 +2237,7 @@ def _start_visible_review_session(
                         playwright_manager.__exit__(None, None, None)
                 except Exception:
                     pass
+            _stop_xvfb_if_needed(xvfb_process, previous_display)
         if started_logged and not session_stored:
             save_session_summary(
                 {
@@ -1705,6 +2277,7 @@ def start_autofill_session(
     job: Job = context["job"]
     packet: ApplicationPacket | None = context["packet"]
     values: dict[str, Any] = context["values"]
+    profile: dict[str, Any] = context["profile"]
     manual_values = _manual_values(values)
     warnings: list[str] = list(context["warnings"])
 
@@ -1758,6 +2331,7 @@ def start_autofill_session(
             job=job,
             packet=packet,
             values=values,
+            profile=profile,
             manual_values=manual_values,
             warnings=warnings,
             resolved_options=resolved_options,
@@ -1900,108 +2474,19 @@ def start_autofill_session(
                 browser.close()
                 return summary
 
-            allow_sensitive_optional = bool(resolved_options.get("fill_sensitive_optional_fields"))
-            if headless and allow_sensitive_optional:
-                warnings.append("Headless mode skips sensitive optional fields even when optional EEO autofill is requested.")
-                allow_sensitive_optional = False
-
-            for field in fields_detected:
-                field_key = str(field.get("field_key") or "unknown_question")
-                label = _first_non_empty(field.get("label_text"), field.get("placeholder"), field.get("name"), field.get("id"), field_key)
-                confidence = float(field.get("confidence") or 0.0)
-                value = values.get(field_key)
-                safe_to_fill = bool(field.get("safe_to_fill"))
-
-                if field_key in SKIPPED_ALWAYS_FIELD_KEYS:
-                    field_results.append(
-                        {
-                            "field_key": field_key,
-                            "label": label,
-                            "selector": field.get("selector"),
-                            "filled": False,
-                            "confidence": confidence,
-                            "reason": "Sensitive field skipped by policy.",
-                        }
-                    )
-                    continue
-
-                if field_key in SENSITIVE_OPTIONAL_FIELD_KEYS and not allow_sensitive_optional:
-                    field_results.append(
-                        {
-                            "field_key": field_key,
-                            "label": label,
-                            "selector": field.get("selector"),
-                            "filled": False,
-                            "confidence": confidence,
-                            "reason": "Sensitive optional field skipped unless explicitly enabled.",
-                        }
-                    )
-                    continue
-
-                if field_key in SENSITIVE_OPTIONAL_FIELD_KEYS and allow_sensitive_optional:
-                    safe_to_fill = True
-
-                if not safe_to_fill:
-                    field_results.append(
-                        {
-                            "field_key": field_key,
-                            "label": label,
-                            "selector": field.get("selector"),
-                            "filled": False,
-                            "confidence": confidence,
-                            "reason": str(field.get("reason") or "Field not considered safe to autofill."),
-                        }
-                    )
-                    continue
-
-                if confidence < HIGH_CONFIDENCE_THRESHOLD:
-                    field_results.append(
-                        {
-                            "field_key": field_key,
-                            "label": label,
-                            "selector": field.get("selector"),
-                            "filled": False,
-                            "confidence": confidence,
-                            "reason": "Confidence below the Stage 8 autofill threshold.",
-                        }
-                    )
-                    continue
-
-                if value in (None, "", []):
-                    field_results.append(
-                        {
-                            "field_key": field_key,
-                            "label": label,
-                            "selector": field.get("selector"),
-                            "filled": False,
-                            "confidence": confidence,
-                            "reason": "No truthful value was available for this field.",
-                        }
-                    )
-                    continue
-
-                try:
-                    fields_attempted += 1
-                    filled, reason = _apply_value_to_field(page, field, value)
-                except PlaywrightError as exc:
-                    filled = False
-                    reason = f"Browser interaction failed: {exc}"
-
-                if filled:
-                    fields_filled += 1
-                    if field_key in {"resume_upload", "cover_letter_upload"}:
-                        files_uploaded.append(Path(str(value)).name)
-
-                field_results.append(
-                    {
-                        "field_key": field_key,
-                        "label": label,
-                        "selector": field.get("selector"),
-                        "filled": filled,
-                        "confidence": confidence,
-                        "reason": reason,
-                    }
-                )
+            field_results, fields_filled, fields_attempted, files_uploaded = _fill_safe_fields(
+                page=page,
+                fields_detected=fields_detected,
+                values=values,
+                job=job,
+                profile=profile,
+                warnings=warnings,
+                allow_sensitive_optional=bool(resolved_options.get("fill_sensitive_optional_fields")),
+                ai_assisted_apply=bool(resolved_options.get("ai_assisted_apply")),
+                user_triggered=bool(resolved_options.get("user_triggered", True)),
+                headless=headless,
+                playwright_error_type=PlaywrightError,
+            )
 
             screenshot_path = _capture_screenshot(page, job.id, "after-attempt", warnings) if headless else screenshot_path
             autofill_effective = fields_filled > 0 or bool(files_uploaded)

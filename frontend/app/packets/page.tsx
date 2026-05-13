@@ -49,14 +49,10 @@ export default async function PacketsPage() {
   return (
     <div className="page">
       <section className="hero">
-        <span className="eyebrow">Stage 8 - Packets + Browser Autofill</span>
-        <h1>Packets</h1>
+        <span className="eyebrow">Advanced</span>
+        <h1>Packet Library</h1>
         <p className="hero-copy">
-          Stage 6 generates reviewable application packets. It does not submit applications.
-        </p>
-        <p className="hero-copy">
-          Generated outputs stay private in the local `outputs/application_packets/` folder, remain gitignored,
-          packet detail views log tracker activity, and Stage 8 can use a packet’s generated files for browser autofill.
+          Review generated application materials. Most users should start from Apply and open packets only when they want to inspect drafts.
         </p>
       </section>
 
@@ -67,7 +63,7 @@ export default async function PacketsPage() {
         </div>
         {packets.length === 0 ? (
           <p className="subtle">
-            No packets have been generated yet. Open a scored job detail page and click Generate Application Packet.
+            No packets have been generated yet. Go to Apply and start AI-assisted apply for a saved job.
           </p>
         ) : (
           <div className="table-wrapper">
@@ -108,8 +104,8 @@ export default async function PacketsPage() {
                           View Packet
                         </Link>
                         {packet.job ? (
-                          <Link href={`/autofill?jobId=${packet.job.id}`} className="button secondary compact">
-                            Autofill
+                          <Link href={`/apply?jobId=${packet.job.id}`} className="button secondary compact">
+                            Apply
                           </Link>
                         ) : null}
                       </div>

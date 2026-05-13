@@ -2,17 +2,18 @@
 
 ## 1. Project Overview
 
-CareerAgent is a customizable, human-in-the-loop job search assistant. It helps a user manage their profile and resume, discover jobs from a saved source database, review and import candidate jobs, verify and score saved jobs, generate application packets, track application status, and safely assist with browser autofill while always stopping before final submission.
+CareerAgent is a customizable, human-in-the-loop job search assistant. The main workflow is now Profile -> Jobs -> Apply -> Insights: users fill out their profile, discover jobs, save good candidates, let CareerAgent automatically verify and score saved jobs, apply with optional AI writing help or basic autofill, manually submit, mark applied, and track outcomes.
 
 Core product areas:
 
 - Profile and resume management from private local files under `data/`.
 - Job discovery from saved ATS/company sources and manually supplied links.
-- Saved jobs pipeline with parsing, verification, scoring, recommendations, and predictions.
-- Application packet generation with tailored resume source, cover letter, recruiter message, application answers, notes, summaries, and metadata.
-- Tracker for application events, statuses, follow-ups, interviews, rejections, offers, and notes.
-- Autofill/manual application flow using Playwright when available, with final submit/apply actions blocked.
-- Insights, market analytics, cautious predictions, source quality, role quality, and settings.
+- Jobs workflow for source discovery, candidate review, saved jobs, manual import, and applied jobs.
+- Automatic verification and scoring whenever a candidate/manual job is saved.
+- Apply workflow with two user-facing modes: AI Resume + Question Help, or Basic Autofill.
+- Internal packet generation and autofill/manual application flow, always stopping before final submission.
+- Insights for tracker/status history, applied/rejected/interview/offer counts, source quality, skill gaps, market summaries, and cautious predictions.
+- Follow-ups are hidden from the primary product workflow for now; existing backend data is preserved.
 
 ## 2. High-Level Architecture
 
@@ -20,7 +21,7 @@ Core product areas:
 CareerAgent
 +-- Frontend: Next.js
 |   +-- frontend/app routes
-|   |   +-- dashboard, profile, jobs, applications, insights, settings
+|   |   +-- dashboard, profile, jobs, apply, insights, settings
 |   |   +-- legacy/direct pages for resume, tracker, packets, autofill, market, predictions, ai
 |   +-- frontend/components
 |   |   +-- managers for jobs, job finder, profile, resume, autofill, tracker, AI
@@ -71,30 +72,45 @@ CareerAgent
   - Uses `ProfileEditor` and `ResumeEditor`.
 
 - `/jobs`
-  - Saved jobs pipeline.
-  - Tabs: Discover, Candidates, Saved Jobs, Recommended, Manual Import.
-  - Uses `JobFinderManager` for discovery/candidates and `JobsManager` for saved/recommended/manual import.
-  - Discover supports Strict, Balanced, and Broad saved-source match modes, first-5/next-5 run paging, source result diagnostics, higher-quality ATS ordering before Workday, and pre-search fit filters for experience level and degree requirement.
-  - Candidate results show detected experience level, years/strength when available, detected degree requirement, match reasons, and import actions.
+  - Job search and save workspace.
+  - Tabs: Discover, Saved Jobs, Applied Jobs, Manual Import.
+  - Uses `JobFinderManager` for discovery and inline candidate review, and `JobsManager` for saved, applied, and manual import views.
+  - Discover supports Strict, Balanced, and Broad saved-source match modes, first-5/next-5 run paging, source result diagnostics, higher-quality ATS ordering before Workday, and pre-search fit filters for experience level, degree requirement, and location type.
+  - Candidate results now live inside Discover after a search and show detected location fit, experience level, years/strength when available, detected degree requirement, match reasons, descriptions, and save actions. The Saved Jobs tab uses the canonical `saved` tab value so saved jobs render correctly.
 
 - `/jobs/[id]`
-  - Job detail page.
-  - Shows parsed job data, verification/scoring/prediction details, packet actions, tracker timeline, and autofill controls.
+  - Secondary read-only job detail page.
+  - Shows company, title, location, match score, verification status, fit signals, and job description.
+  - Advanced scoring/verification/prediction/raw data remains collapsed behind Advanced details.
+
+- `/apply`
+  - Primary apply workspace.
+  - User arrives from Saved Jobs via `/apply?jobId=<id>` or selects a saved job manually; invalid or missing selections now show an explicit choose-job message instead of silently choosing another job.
+  - `Start AI-assisted apply` calls `POST /api/jobs/{job_id}/apply/start-ai-assisted`, creates/reuses a local packet, uses the selected AI provider only when allowed, otherwise returns a clear no-external-AI fallback message, and uses the same `Fill Application in Chromium` path when visible autofill is available.
+  - `Start Basic Autofill` calls `POST /api/jobs/{job_id}/apply/start-basic-autofill`, prepares factual profile/resume autofill only, returns clear visible-autofill versus manual-fallback states, packet/upload status, warnings, copyable manual values, and visible-browser setup instructions; when visible autofill is available the Apply page immediately starts the visible Chromium fill.
+  - `Fill Application in Chromium` calls `POST /api/jobs/{job_id}/apply/fill-application`, launches headed Playwright Chromium when available, detects text inputs, selects, files, textareas, rich textboxes, and ATS-style question blocks, fills safe fields/uploads available files, can fill fresh review-required AI drafts for each detected long question only in AI-assisted mode, stores a visible session, and never clicks final submit/apply/confirm.
+  - Optional voluntary EEO dropdown filling is controlled by an explicit Apply-page checkbox and only selects conservative "Prefer not to answer" / "Decline to self-identify" style options when present.
+  - Basic Autofill detects application forms embedded in ATS iframes, including Greenhouse embed pages, and fills safe fields inside the frame while keeping the top-level browser session open.
+  - Fill Application appears when Playwright headed mode is available from a local backend; Docker on macOS cannot open a native Chromium window that the user can continue from.
+  - `scripts/docker-up-open.sh` starts Postgres and frontend in Docker, stops the Docker backend, starts the backend locally with `PLAYWRIGHT_HEADLESS=false`, and opens `/apply` in Chromium/Chrome for native visible autofill.
+  - Autofill status reports whether `.env` loaded, backend runtime, display availability, Docker/Xvfb state, and the effective Playwright mode.
+  - Open Application/Open in Browser calls `POST /api/jobs/{job_id}/open-application`, logs the open event, opens the URL in a new tab when possible, and never marks the job applied.
+  - Mark Applied calls `POST /api/jobs/{job_id}/mark-applied` after the user manually submits, moving the job out of Saved Jobs and into Applied Jobs.
+  - CareerAgent never submits automatically and AI only runs after the explicit AI-assisted click.
 
 - `/applications`
-  - Unified applications workspace.
-  - Tabs: Tracker, Packets, Autofill, Follow-ups.
-  - Uses `TrackerBoard` and `AutofillManager`; links to packet library.
+  - Legacy route that redirects to `/apply` for backward compatibility.
 
 - `/insights`
   - Consolidated insight workspace.
-  - Tabs: Market, Predictions, Skills, Sources.
-  - Provides summaries and links to full market and predictions pages.
+  - Tabs: Tracker, Market, Predictions, Skills, Sources.
+  - Tracker/status overview lives here instead of as a primary Applications tab.
+  - Provides applied/saved/interview/rejected/offer counts, recent activity, source quality, skills, market summaries, and prediction summaries.
 
 - `/settings`
   - Settings workspace.
   - Tabs: AI Provider, Environment, Safety, Data/GitHub Safety.
-  - Shows AI provider state, autofill health, source database health, resume compiler status, and private-data guardrails.
+  - Shows AI provider policy, selected OpenAI/Gemini/mock provider status, external-call allow-flag status, autofill health, source database health, resume compiler status, and private-data guardrails.
 
 - `/resume`
   - Legacy/direct route that redirects to `/profile?tab=resume`.
@@ -103,20 +119,18 @@ CareerAgent
   - Legacy/direct route that redirects to `/jobs?tab=discover`.
 
 - `/tracker`
-  - Direct tracker page with tracker board and links to market, predictions, AI settings, and autofill.
-  - The newer unified entry point is `/applications`.
+  - Legacy route that redirects to `/insights?tab=tracker`.
 
 - `/packets`
-  - Packet library page.
-  - Lists generated application packets and links to packet details/autofill.
+  - Advanced packet library page.
+  - Packets are no longer a primary tab; normal users generate/review them from Apply.
 
 - `/packets/[id]`
   - Packet detail page.
   - Previews generated files, packet metadata, safety notes, and autofill controls for the associated job.
 
 - `/autofill`
-  - Direct autofill page.
-  - Shows available autofill modes and safe fill actions for a selected job.
+  - Legacy route that redirects to `/apply`, preserving `jobId` when supplied.
 
 - `/market`
   - Full market analytics page.
@@ -133,6 +147,10 @@ CareerAgent
   - Local fake application form for autofill testing.
   - Includes safe fields, sensitive optional EEO fields, dangerous fields, file uploads, and a submit button that should never be clicked by CareerAgent.
 
+- `/test-forms/lever-rd`
+  - Local Lever-style Baseball Operations R&D Intern form for AI-assisted apply testing.
+  - Includes resume upload, contact fields, current location/company, LinkedIn, pronouns, technical/statistics/baseball long-answer questions, optional EEO fields, future-opportunities consent, and a submit button that should never be clicked by CareerAgent.
+
 ## 4. Backend API Route Map
 
 - `backend/app/api/routes/health.py`
@@ -141,7 +159,7 @@ CareerAgent
 
 - `backend/app/api/routes/ai.py`
   - Mounted at `/api/ai`.
-  - Provider status, provider list, and provider test endpoint.
+  - Provider status, API policy/allow-flag status, provider list, and provider test endpoint. External provider tests fail closed unless the action is allowed, user-triggered, user-enabled, and environment-enabled.
 
 - `backend/app/api/routes/profile.py`
   - Mounted at `/api/profile`.
@@ -153,12 +171,12 @@ CareerAgent
 
 - `backend/app/api/routes/jobs.py`
   - Mounted at `/api/jobs`.
-  - Job list/detail/update/delete, parse/import, raw URL verification, verify all/single, score all/single, and recommendations.
+  - Job list/detail/update/delete, parse/import, Apply start endpoints, Open Application logging, Mark Applied, raw URL verification, verify all/single, score all/single, and recommendations.
 
 - `backend/app/api/routes/job_finder.py`
   - Mounted at `/api/job-finder`.
-  - Job Finder status, query generation, source CSV/JSON import, source summary/list/update, saved-source search, discovery runs, candidates, candidate exclusion, and candidate import.
-  - Saved-source and manual discovery requests accept `target_experience_levels`, `excluded_experience_levels`, `degree_filter`, and `match_mode`.
+  - Job Finder status, local/optional selected-provider AI query generation, source CSV/JSON import, source summary/list/update, saved-source search, discovery runs, candidates, candidate exclusion, and candidate import.
+  - Saved-source and manual discovery requests accept `target_experience_levels`, `excluded_experience_levels`, `degree_filter`, `location_filter`, `allow_unknown_location`, and `match_mode`.
 
 - `backend/app/api/routes/tracker.py`
   - Mounted at `/api/tracker`.
@@ -185,7 +203,7 @@ CareerAgent
 ### Jobs
 
 - `backend/app/services/jobs/parser.py`
-  - Parses pasted job descriptions or fetched job URLs, including Workday URL inference, embedded metadata extraction, skills, salary, experience, responsibilities, requirements, and optional AI parsing.
+  - Parses pasted job descriptions or fetched job URLs with local/rule-based logic only, including Workday URL inference, embedded metadata extraction, skills, salary, experience, responsibilities, and requirements. AI/API parsing is blocked by policy.
 
 - `backend/app/services/jobs/job_store.py`
   - Creates, lists, updates, deletes, and recommends saved `Job` records; provides placeholder freshness/priority helpers.
@@ -194,7 +212,8 @@ CareerAgent
 
 - `backend/app/services/job_finder/discovery.py`
   - Orchestrates source discovery, saved-source search, run/candidate persistence, filtering, dedupe, and importing candidates into saved jobs.
-  - Saved-source search prioritizes Lever, Greenhouse, Ashby, company career pages, then Workday; records per-source counts plus no-result diagnostics for exclusions, duplicates, incomplete postings, and primary experience/degree/location/role/low-confidence exclusion buckets.
+  - Saved-source searching is local/source-based and does not call OpenAI or Gemini.
+  - Saved-source search prioritizes Lever, Greenhouse, Ashby, company career pages, then Workday; records per-source counts plus no-result diagnostics for exclusions, duplicates, incomplete postings, primary experience/degree/location/role/low-confidence exclusion buckets, and location category counts.
   - If a saved-source run fetches jobs but no normal candidates survive, it promotes the best non-hard-excluded soft matches as weak near matches with an explicit fallback reason and includes sample excluded jobs when true zero-result runs remain.
   - Candidate import preserves Job Finder fit metadata, match reasons, role category, experience details, degree details, and full description in saved job metadata when no first-class job column exists.
 
@@ -208,12 +227,12 @@ CareerAgent
   - Normalizes URLs and checks candidates against existing candidates and saved jobs.
 
 - `backend/app/services/job_finder/filters.py`
-  - Filters/classifies candidates for target roles, selected experience levels, Bay Area/remote fit, selected degree requirements, and Strict/Balanced/Broad Job Finder match modes.
-  - Strict honors fit filters tightly; Balanced hard-excludes only clear disqualifiers while keeping unknowns, adjacent technical roles, outside-target US locations, and 3-5 year stretch roles as weak matches; Broad honors hard disqualifiers while allowing more reviewable stretch roles.
+  - Filters/classifies candidates for target roles, selected experience levels, selected location categories, selected degree requirements, and Strict/Balanced/Broad Job Finder match modes.
+  - Strict honors fit filters tightly; Balanced hard-excludes only clear disqualifiers while keeping unknowns, adjacent technical roles, selected or strong near-match US locations, and 3-5 year stretch roles as weak matches; Broad honors hard disqualifiers while allowing more reviewable stretch roles.
   - Filter results carry hard/soft exclusion metadata, primary exclusion category, broad-match eligibility, and all reasons for diagnostics/fallback.
 
 - `backend/app/services/job_finder/query_builder.py`
-  - Builds a search profile from profile/resume data and generates rule-based or optional AI-assisted queries.
+  - Builds a search profile from profile/resume data and generates broad keyword-style rule-based queries by default. Optional selected-provider AI query generation is one-time, explicit, guarded, and only returns keyword suggestions; default keywords are ranking signals, not exact required phrases.
 
 - `backend/app/services/job_finder/role_classifier.py`
   - Classifies role category from title/description, including strong data/ML/analytics targets and adjacent technical roles such as software, backend, platform, infrastructure, AI/data solutions, technical analyst, and quantitative analyst.
@@ -223,7 +242,7 @@ CareerAgent
   - Also classifies degree requirements into none mentioned, bachelor's, master's, PhD, unknown, with required/preferred/equivalent-experience strength and strict master's/PhD required flags; degree exclusions are limited to clear Master’s-required or PhD-required conflicts.
 
 - `backend/app/services/job_finder/location_classifier.py`
-  - Classifies Bay Area, remote US, hybrid, outside target, or unknown location fit.
+  - Classifies Bay Area, Remote US, non-Bay-Area California, Other US, International, or Unknown location fit, preserving remote/hybrid/onsite status and reasons for filtering diagnostics.
 
 ### Job Finder Source Connectors
 
@@ -252,7 +271,7 @@ CareerAgent
   - Handles manually pasted links, especially LinkedIn/Indeed-style sources, without automated scraping.
 
 - `backend/app/services/job_finder/sources/web_search.py`
-  - Placeholder for future configured web-search provider.
+  - Disabled placeholder; saved-source search does not use web-search APIs.
 
 - `backend/app/services/job_finder/sources/github_lists.py`
   - Placeholder for future GitHub company-list source integration.
@@ -269,12 +288,12 @@ CareerAgent
   - Estimates priority, close risk, response likelihood, source quality, role quality, apply windows, confidence, and prediction exports.
 
 - `backend/app/services/market/analytics.py`
-  - Builds pipeline summaries, breakdowns, skills, score analytics, outcome metrics, activity timelines, stale-job recommendations, insights, and safe exports.
+  - Builds pipeline summaries, breakdowns, skills, score analytics, outcome metrics, activity timelines, stale-job recommendations, insights, and safe exports using local processing only.
 
 ### Packet Generation
 
 - `backend/app/services/generator/packet_generator.py`
-  - Generates a packet folder and database record for a job, writes all packet files, compiles resume PDF when requested, logs tracker events, and promotes job status.
+  - Generates a packet folder and database record for a job, writes all packet files, compiles resume PDF when requested, logs tracker events, and promotes job status. Default packet generation is deterministic/local; optional selected-provider AI writing assistance is guarded and explicit. AI-assisted resume tailoring can replace the generated LaTeX source only when the provider returns a complete validated LaTeX document that passes safety checks; failed validation or compilation falls back to deterministic tailoring.
 
 - `backend/app/services/generator/cover_letter.py`
   - Deterministic cover letter draft.
@@ -303,18 +322,18 @@ CareerAgent
   - Loads/saves `data/profile.yaml`, creates it from `data/profile.example.yaml`, and reports GitHub safety status.
 
 - `backend/app/services/resume/latex_resume.py`
-  - Loads/saves `data/resume/base_resume.tex`, creates it from example, finds LaTeX compilers, compiles PDFs, and reports resume safety/status.
+  - Loads/saves `data/resume/base_resume.tex`, creates it from example, finds LaTeX compilers, tries available compilers before failing, falls back to the Docker backend image for compilation when the local visible backend lacks TeX, compiles PDFs, and reports resume safety/status.
 
 - `backend/app/services/resume/tailor_resume.py`
-  - Produces minimal tailored LaTeX resume source changes while preserving structure.
+  - Produces minimal deterministic tailored LaTeX resume source changes while preserving structure, used as the safe fallback whenever AI-tailored source is unavailable or invalid.
 
 ### Autofill / Browser Agent
 
 - `backend/app/services/browser_agent/autofill.py`
-  - Builds safe autofill values from profile/job/packet, detects environment support, opens Playwright sessions, fills safe fields, uploads files when possible, blocks final actions, captures diagnostics, and logs tracker events.
+  - Builds safe autofill values from profile/job/packet, keeps Basic Autofill factual-only, gates AI-assisted long-answer drafting behind `draft_application_answer` policy and explicit user-triggered mode, drafts live long-answer fields from the exact detected on-page prompt instead of reusing generic packet text, detects environment support, refuses to treat Docker/Xvfb as a native visible browser on macOS, opens Playwright sessions, fills safe fields, uploads files when possible, blocks final actions, captures diagnostics, and logs tracker events.
 
 - `backend/app/services/browser_agent/field_detector.py`
-  - Detects and classifies application form fields with confidence and sensitivity flags.
+  - Detects and classifies application form fields with confidence and sensitivity flags, including ATS-style textarea/rich long-answer question blocks and categories such as technical, math, statistics, domain, essay, why-company, and about-yourself.
 
 - `backend/app/services/browser_agent/safe_actions.py`
   - Detects blocked final submit/apply/confirm action text.
@@ -324,6 +343,9 @@ CareerAgent
 
 ### AI
 
+- `backend/app/services/ai/policy.py`
+  - Central selected-provider AI allowlist and hard guard. OpenAI and Gemini are alternatives selected by `AI_PROVIDER`; allowed actions are validated tailored resume source, cover letters, recruiter messages, long application answers, and one-time Job Finder query generation. Parsing, matching, scoring, verification, insights, source discovery/search, autofill, and application submission are blocked from AI usage.
+
 - `backend/app/services/ai/base.py`
   - Abstract AI provider interface.
 
@@ -331,16 +353,16 @@ CareerAgent
   - Offline deterministic/mock provider for testable drafts.
 
 - `backend/app/services/ai/openai_provider.py`
-  - Optional OpenAI-backed provider.
+  - Optional OpenAI-backed provider guarded by `AI_PROVIDER=openai`, `AI_ALLOW_EXTERNAL_CALLS=true`, an allowed action, user-enabled request, explicit user trigger, and `OPENAI_API_KEY`.
 
-- `backend/app/services/ai/local_provider.py`
-  - Placeholder local LLM provider.
+- `backend/app/services/ai/gemini_provider.py`
+  - Optional Gemini-backed provider guarded by `AI_PROVIDER=gemini`, `AI_ALLOW_EXTERNAL_CALLS=true`, an allowed action, user-enabled request, explicit user trigger, and `GEMINI_API_KEY`.
 
 - `backend/app/services/ai/provider_factory.py`
-  - Normalizes provider names and returns active/provider availability.
+  - Normalizes provider names and returns exactly one selected provider: mock, OpenAI, or Gemini.
 
 - `backend/app/services/ai/prompts.py`
-  - Prompt builders for job parsing, resume tailoring, packet drafts, and market insights.
+  - Prompt builders for allowed writing assists only: resume tailoring, packet drafts, recruiter messages, and application answers.
 
 - `backend/app/services/ai/safety.py`
   - Sanitizes AI output, detects risky claims, and adds review-required notices.
@@ -422,32 +444,37 @@ Source CSV/JSON or saved sources
   -> Filter/classify/dedupe
   -> JobCandidate
   -> User reviews candidates
-  -> Import selected
+  -> Save selected
   -> Job
+  -> Auto-verify
+  -> Auto-score
 ```
 
 ### B. Application Flow
 
 ```text
-Job
-  -> Verify availability
-  -> Score fit/priority
-  -> Generate application packet
+Saved Job
+  -> User opens Apply
+  -> Choose AI Resume + Question Help
+     or Basic Autofill
+  -> Review generated draft/packet or safe autofill values
   -> Open in browser or Fill Application
   -> User manually reviews
   -> User manually submits
   -> Mark applied
-  -> Tracker timeline
+  -> Applied Jobs list
+  -> Insights tracker/status history
 ```
 
 ### C. Autofill Flow
 
 ```text
-Selected Job + Packet
+Selected saved job + optional packet
   -> Open in Browser or Fill Application
   -> Playwright visible browser if available
   -> Detect fields
-  -> Fill only safe, high-confidence fields
+  -> Basic Autofill fills only safe, high-confidence factual fields
+     or AI-assisted apply also drafts review-required long-answer responses when allowed
   -> Upload generated files when safe/available
   -> Final submit/apply/confirm blocked
   -> User manually completes/submits
@@ -473,13 +500,13 @@ job-database-script
   - Main project description, stage notes, features, setup, safety boundaries, and workflow.
 
 - `.env.example`
-  - Public environment variable template.
+  - Public environment variable template; Docker Compose reads `.env`, and local backend runs load the repo-root `.env` at startup.
 
 - `.gitignore`
   - Ignores private profile/resume files, environment files, generated outputs, local DB files, caches, virtualenvs, Node build artifacts, and PDFs.
 
 - `docker-compose.yml`
-  - Runs PostgreSQL, FastAPI backend, and Next.js frontend for local development.
+  - Runs PostgreSQL, FastAPI backend, and Next.js frontend for local development, including selected-provider AI env passthrough for `AI_PROVIDER`, `AI_ALLOW_EXTERNAL_CALLS`, OpenAI config, and Gemini config.
 
 - `PROJECT_MAP.md`
   - This handoff map.
@@ -493,10 +520,10 @@ job-database-script
   - Backend container image.
 
 - `backend/requirements.txt`
-  - FastAPI, SQLAlchemy, PostgreSQL driver, PyYAML, requests, BeautifulSoup, Playwright, and OpenAI dependencies.
+  - FastAPI, SQLAlchemy, PostgreSQL driver, PyYAML, requests, BeautifulSoup, Playwright, and optional OpenAI dependencies.
 
 - `backend/app/core/config.py`
-  - Environment-backed settings, project/data/output path resolution, database URL, AI settings, and Playwright settings.
+  - Environment-backed settings, repo-root `.env` loading for local runs, project/data/output path resolution, runtime-aware database URL selection, AI settings, and Playwright settings.
 
 - `backend/app/db/database.py`
   - SQLAlchemy engine/session/base, `init_db`, table creation, lightweight schema sync/backfills, and sample-job normalization.
@@ -538,7 +565,7 @@ job-database-script
   - Prediction estimates, quality summaries, apply windows, and exports.
 
 - `backend/app/services/ai/`
-  - AI provider abstraction, OpenAI/mock/local providers, prompts, and safety checks.
+  - AI provider abstraction, mock/OpenAI/Gemini providers, prompts, policy guard, and safety checks.
 
 - `backend/app/services/profile/`
   - Profile YAML load/save/status helpers.
@@ -579,13 +606,16 @@ job-database-script
   - Profile/resume/settings tabs for user context.
 
 - `frontend/app/jobs/page.tsx`
-  - Job discovery, candidates, saved jobs, recommendations, and manual import tabs.
+  - Jobs tabs: Discover, Saved Jobs, Applied Jobs, Manual Import. Candidate review lives inside Discover.
 
 - `frontend/app/jobs/[id]/page.tsx`
   - Saved job detail page.
 
+- `frontend/app/apply/page.tsx`
+  - Primary Apply page with saved-job selection, Start AI-assisted apply, Start Basic Autofill, visible-browser result cards, manual fallback cards, open/fill controls, packet review, copyable fallback values, setup instructions, and Mark Applied after manual submission.
+
 - `frontend/app/applications/page.tsx`
-  - Unified tracker, packet, autofill, and follow-up workspace.
+  - Redirects to `/apply`, preserving `jobId`.
 
 - `frontend/app/insights/page.tsx`
   - Unified market/prediction/skills/source insight workspace.
@@ -623,6 +653,9 @@ job-database-script
 - `frontend/app/test-application-form/page.tsx`
   - Local fake application form for autofill testing.
 
+- `frontend/app/test-forms/lever-rd/page.tsx`
+  - Local Lever-style R&D application form used to test long-answer detection, AI-assisted drafts, EEO skipping, resume upload warnings, consent handling, and final-submit blocking.
+
 - `frontend/components/NavBar.tsx`
   - Main navigation and route-group active state.
 
@@ -636,31 +669,31 @@ job-database-script
   - Resume LaTeX editor/compile UI.
 
 - `frontend/components/JobsManager.tsx`
-  - Saved/recommended/manual job UI with parse/import/verify/score actions.
+  - Saved, applied, and manual job UI. Manual saves automatically verify and score; reverify/rescore are advanced refresh actions.
 
 - `frontend/components/JobFinderManager.tsx`
-  - Job Finder UI for source import, saved-source search, discovery, candidate review, and candidate import.
+  - Job Finder UI for source import, saved-source search, discovery, candidate review, and candidate save. Saving candidates automatically verifies and scores the resulting job.
 
 - `frontend/components/JobTable.tsx`
   - Shared job table.
 
 - `frontend/components/JobDetailView.tsx`
-  - Job detail UI with scoring, verification, prediction, packets, timeline, and autofill.
+  - Simple secondary job detail UI with Apply as the primary action and advanced evidence/raw data collapsed.
 
 - `frontend/components/TrackerBoard.tsx`
-  - Tracker dashboard grouped by application status.
+  - Legacy tracker board; primary tracker/status overview now appears in Insights.
 
 - `frontend/components/TrackingActions.tsx`
-  - Status, note, follow-up, and open-application actions.
+  - Legacy status/note/follow-up/open-application actions retained for older screens.
 
 - `frontend/components/AutofillManager.tsx`
-  - Autofill page orchestration and local test form handling.
+  - Legacy autofill orchestration retained internally; `/autofill` redirects to Apply.
 
 - `frontend/components/AutofillControls.tsx`
   - Per-job autofill/open-in-browser controls, dry-run/manual values, visible setup hints, and session closing.
 
 - `frontend/components/AIManager.tsx`
-  - AI provider status and test UI.
+  - AI provider status and test UI for the selected `AI_PROVIDER`; shows whether the test used an external provider, model, and blocked reason.
 
 - `frontend/lib/api.ts`
   - Typed frontend API client for all backend feature areas.
@@ -685,14 +718,8 @@ job-database-script
 - `job-database-script/scripts/discover_job_sources.py`
   - Main source discovery CLI: reads seed/pasted/career inputs, normalizes URLs, tests sources, stores to DB, and exports CSV/JSON.
 
-- `job-database-script/scripts/generate_google_queries.py`
-  - Generates manual Google search queries.
-
 - `job-database-script/scripts/scrape_ddg_startups.py`
   - Uses DuckDuckGo search to find startup ATS boards.
-
-- `job-database-script/scripts/scrape_google_for_ats.py`
-  - Direct Google scraper helper; README warns it may be rate-limited.
 
 - `job-database-script/scripts/mine_github_repos.py`
   - Mines public GitHub repositories for ATS links.
@@ -789,8 +816,8 @@ Safe examples/templates:
 
 - Workday support can be partial because many Workday pages are JavaScript-heavy and may only yield URL-inferred metadata.
 - LinkedIn and Indeed are manual pasted-link sources only; CareerAgent should not automatically scrape them.
-- Google search should not be scraped automatically in the main app. The source script includes manual query helpers and experimental/direct helpers with rate-limit caveats.
-- Visible autofill requires a local backend/browser environment with `PLAYWRIGHT_HEADLESS=false` and an available display; Docker defaults are typically headless diagnostics.
+- Search-engine HTML, LinkedIn, and Indeed should not be scraped automatically in the main app.
+- Visible autofill uses Playwright headed mode from a local backend. Docker/Xvfb can run diagnostics, but it is not a normal macOS Chromium window the user can continue from.
 - CareerAgent never clicks final submit/apply/confirm/send buttons. The user must manually review and submit.
 - Source database quality depends on generated/imported CSV/JSON quality and source testing results.
 - Job title, description, company, location, salary, skills, and application questions depend on ATS extraction quality.

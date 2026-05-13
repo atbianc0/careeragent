@@ -182,7 +182,7 @@ function AutofillResult({ summary, onSessionClosed }: { summary: AutofillStartRe
               {copiedUrl ? "Copied" : "Copy URL"}
             </button>
             <Link className="button secondary compact" href={`/jobs/${summary.job_id}`}>
-              Back to Job
+              View Details
             </Link>
           </div>
         </section>
@@ -197,7 +197,7 @@ function AutofillResult({ summary, onSessionClosed }: { summary: AutofillStartRe
               {copiedUrl ? "Copied" : "Copy URL"}
             </button>
             <Link className="button secondary compact" href={`/jobs/${summary.job_id}`}>
-              Back to Job
+              View Details
             </Link>
           </div>
         </section>
@@ -559,7 +559,7 @@ export function AutofillControls({
           <strong>No application packet selected</strong>
           <p>Generate a packet before Fill Application if you want CareerAgent to upload a tailored resume/cover letter.</p>
           <Link className="button secondary compact" href={`/jobs/${job.id}`}>
-            Open Job Detail to Generate Packet
+            View Details
           </Link>
         </section>
       ) : null}
@@ -623,7 +623,7 @@ export function AutofillControls({
           <h3>Fill Application</h3>
           <p className="subtle">Visible browser autofill. Fills safe fields and leaves the browser open.</p>
           {!visibleBrowserAvailable ? (
-            <p className="subtle">Requires visible local backend. Current mode: {isHeadlessMode ? "headless Docker" : "headed unavailable"}.</p>
+            <p className="subtle">Visible autofill requires local backend. Current mode: {isHeadlessMode ? "headless Docker" : "headed unavailable"}.</p>
           ) : null}
           <button className="button" type="button" onClick={() => void handleFillApplication()} disabled={!canUseApplicationUrl || busyAction !== null}>
             {busyAction === "fill" ? "Filling..." : "Fill Application"}

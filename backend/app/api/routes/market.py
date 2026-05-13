@@ -73,12 +73,8 @@ def market_stale_jobs(db: Session = Depends(get_db)) -> list[dict]:
 
 
 @router.get("/insights")
-def market_insights(
-    use_ai: bool = Query(False),
-    provider: str | None = None,
-    db: Session = Depends(get_db),
-) -> list[dict]:
-    return get_recommended_insights(db, use_ai=use_ai, provider_name=provider)
+def market_insights(db: Session = Depends(get_db)) -> list[dict]:
+    return get_recommended_insights(db)
 
 
 @router.get("/export", response_model=None)

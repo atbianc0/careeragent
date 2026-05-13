@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 from copy import deepcopy
 from datetime import datetime, timezone
+import os
 from typing import Any
 from uuid import uuid4
 
@@ -35,6 +36,8 @@ def create_session(
     opened_url: str,
     mode: str = "visible_review",
     playwright_manager: Any | None = None,
+    xvfb_process: Any | None = None,
+    previous_display: str | None = None,
     created_at: datetime | None = None,
 ) -> dict[str, Any]:
     session_id = str(uuid4())
@@ -49,6 +52,8 @@ def create_session(
         "context": context,
         "page": page,
         "playwright_manager": playwright_manager,
+        "xvfb_process": xvfb_process,
+        "previous_display": previous_display,
     }
     return session_public_summary(_ACTIVE_SESSIONS[session_id])
 
@@ -73,6 +78,15 @@ def _session_is_closed(session: dict[str, Any]) -> bool:
     if page is not None:
         try:
             if page.is_closed():
+                return True
+            page.evaluate("() => document.readyState")
+        except Exception:
+            return True
+
+    context = session.get("context")
+    if context is not None:
+        try:
+            if not getattr(context, "pages", []):
                 return True
         except Exception:
             return True
@@ -127,6 +141,23 @@ def close_session(session_id: str) -> dict[str, Any]:
                 manager.__exit__(None, None, None)
         except Exception as exc:  # pragma: no cover - defensive cleanup
             errors.append(f"playwright_manager: {exc}")
+
+    xvfb_process = session.get("xvfb_process")
+    if xvfb_process is not None:
+        try:
+            if xvfb_process.poll() is None:
+                xvfb_process.terminate()
+                try:
+                    xvfb_process.wait(timeout=2)
+                except Exception:
+                    xvfb_process.kill()
+        except Exception as exc:  # pragma: no cover - defensive cleanup
+            errors.append(f"xvfb_process: {exc}")
+        previous_display = session.get("previous_display")
+        if previous_display:
+            os.environ["DISPLAY"] = str(previous_display)
+        elif os.getenv("DISPLAY") == ":99":
+            os.environ.pop("DISPLAY", None)
 
     summary = session_public_summary(session)
     summary["closed"] = True

@@ -121,6 +121,8 @@ class AutofillStatusResponse(BaseModel):
     playwright_headless: bool
     playwright_use_xvfb: bool
     playwright_slow_mo_ms: int
+    env_file_loaded: bool = False
+    env_path: str = ""
     install_command: str
     playwright_install_hint: str
     python_executable: str

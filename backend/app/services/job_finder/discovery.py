@@ -214,6 +214,7 @@ def _apply_fit_filters(search_profile: dict[str, Any], payload: dict[str, Any]) 
     search_profile["match_mode"] = str(payload.get("match_mode") or "balanced")
     search_profile["target_experience_levels"] = list(payload.get("target_experience_levels") or ["new_grad_entry", "early_career", "unknown"])
     search_profile["excluded_experience_levels"] = list(payload.get("excluded_experience_levels") or ["senior"])
+    search_profile["allow_unknown_location"] = bool(payload.get("allow_unknown_location", True))
     search_profile["degree_filter"] = dict(
         payload.get("degree_filter")
         or {
@@ -224,6 +225,17 @@ def _apply_fit_filters(search_profile: dict[str, Any], payload: dict[str, Any]) 
             "allow_phd_preferred": True,
             "allow_phd_required": False,
             "allow_unknown": True,
+        }
+    )
+    search_profile["location_filter"] = dict(
+        payload.get("location_filter")
+        or {
+            "allow_bay_area": True,
+            "allow_remote_us": True,
+            "allow_unknown": True,
+            "allow_non_bay_area_california": False,
+            "allow_other_us": False,
+            "allow_international": False,
         }
     )
 
@@ -345,11 +357,34 @@ def job_finder_status() -> dict[str, Any]:
     }
 
 
-def generate_queries(*, use_ai: bool = False, provider: str = "mock") -> dict[str, Any]:
+def generate_queries(
+    *,
+    use_ai: bool = False,
+    user_enabled: bool = False,
+    user_triggered: bool = False,
+) -> dict[str, Any]:
     profile, resume_text, warnings = load_search_inputs()
     search_profile = build_search_profile(profile, resume_text)
-    queries = generate_ai_queries(profile, resume_text, provider=provider) if use_ai else generate_rule_based_queries(profile, resume_text)
-    return {"search_profile": search_profile, "queries": queries, "default_queries": generate_rule_based_queries({}, "")[:8], "warnings": warnings}
+    api_metadata: dict[str, Any] = {"api_used": False, "api_action": "generate_job_search_queries", "provider": "rule_based"}
+    if use_ai:
+        ai_result = generate_ai_queries(
+            profile,
+            resume_text,
+            user_enabled=user_enabled,
+            user_triggered=user_triggered,
+        )
+        queries = list(ai_result.get("queries") or [])
+        warnings = warnings + list(ai_result.get("warnings") or [])
+        api_metadata.update({key: value for key, value in ai_result.items() if key != "queries" and key != "warnings"})
+    else:
+        queries = generate_rule_based_queries(profile, resume_text)
+    return {
+        "search_profile": search_profile,
+        "queries": queries,
+        "default_queries": generate_rule_based_queries({}, "")[:8],
+        "warnings": warnings,
+        **api_metadata,
+    }
 
 
 def run_discovery(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
@@ -362,8 +397,6 @@ def run_discovery(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     profile, resume_text, profile_warnings = load_search_inputs()
     search_profile = build_search_profile(profile, resume_text)
     _apply_fit_filters(search_profile, payload)
-    if payload.get("use_ai_queries") and not queries:
-        queries = generate_ai_queries(profile, resume_text, provider="mock")
     if not queries:
         queries = generate_rule_based_queries(profile, resume_text)[:8]
 
@@ -373,7 +406,16 @@ def run_discovery(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
         location=location,
         status="running",
         errors=[],
-        metadata_json={"source_urls": source_urls, "manual_links_count": len(manual_links), "profile_warnings": profile_warnings},
+        metadata_json={
+            "source_urls": source_urls,
+            "manual_links_count": len(manual_links),
+            "profile_warnings": profile_warnings,
+            "match_mode": search_profile.get("match_mode"),
+            "target_experience_levels": search_profile.get("target_experience_levels"),
+            "excluded_experience_levels": search_profile.get("excluded_experience_levels"),
+            "degree_filter": search_profile.get("degree_filter"),
+            "location_filter": search_profile.get("location_filter"),
+        },
     )
     db.add(run)
     db.commit()
@@ -611,6 +653,7 @@ def search_saved_sources(db: Session, payload: dict[str, Any]) -> dict[str, Any]
             "target_experience_levels": search_profile.get("target_experience_levels"),
             "excluded_experience_levels": search_profile.get("excluded_experience_levels"),
             "degree_filter": search_profile.get("degree_filter"),
+            "location_filter": search_profile.get("location_filter"),
             "profile_warnings": profile_warnings,
             "source_database": True,
         },
@@ -628,6 +671,14 @@ def search_saved_sources(db: Session, payload: dict[str, Any]) -> dict[str, Any]
     incomplete_reasons: dict[str, int] = {}
     duplicate_reasons: dict[str, int] = {}
     exclusion_buckets = {"experience": 0, "degree": 0, "location": 0, "role": 0, "low_confidence": 0, "other": 0}
+    location_counts = {
+        "bay_area": 0,
+        "remote_us": 0,
+        "unknown": 0,
+        "non_bay_area_california": 0,
+        "other_us": 0,
+        "international": 0,
+    }
     soft_excluded: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
     hard_excluded_payloads: list[dict[str, Any]] = []
 
@@ -664,6 +715,8 @@ def search_saved_sources(db: Session, payload: dict[str, Any]) -> dict[str, Any]
             candidate.setdefault("source_type", source_type)
             candidate.setdefault("source_name", source.name)
             payload_data = _candidate_payload(candidate, run, search_profile, db, source)
+            location_fit = str(payload_data.get("location_fit") or "unknown")
+            location_counts[location_fit] = location_counts.get(location_fit, 0) + 1
             if payload_data["duplicate_key"] in seen_keys:
                 payload_data["filter_status"] = "duplicate"
                 payload_data["filter_reasons"] = list(payload_data["filter_reasons"]) + ["Duplicate within this discovery run."]
@@ -772,6 +825,12 @@ def search_saved_sources(db: Session, payload: dict[str, Any]) -> dict[str, Any]
         "excluded_by_role": exclusion_buckets["role"],
         "excluded_by_low_confidence": exclusion_buckets["low_confidence"],
         "excluded_other": exclusion_buckets["other"],
+        "bay_area_found": location_counts["bay_area"],
+        "remote_us_found": location_counts["remote_us"],
+        "unknown_location_found": location_counts["unknown"],
+        "non_bay_area_california_found": location_counts["non_bay_area_california"],
+        "other_us_found": location_counts["other_us"],
+        "international_found": location_counts["international"],
         "top_exclusion_reasons": _top_reasons(exclusion_reasons),
         "top_incomplete_reasons": _top_reasons(incomplete_reasons),
         "top_duplicate_reasons": _top_reasons(duplicate_reasons),
@@ -789,6 +848,8 @@ def search_saved_sources(db: Session, payload: dict[str, Any]) -> dict[str, Any]
             else []
         },
         "suggestions": [
+            "Many jobs were outside your selected locations. Try US-wide or Any location.",
+            "Many jobs had unknown location. Keep Unknown location selected to review them.",
             "Include Mid-Level stretch roles.",
             "Include unknown experience.",
             "Include Master's required if you want graduate-degree roles.",
@@ -858,7 +919,7 @@ def _candidate_description_for_import(candidate: JobCandidate) -> str:
     return str(candidate.description_snippet or "").strip()
 
 
-def import_candidate(db: Session, candidate_id: int, *, auto_verify: bool = False, auto_score: bool = False) -> dict[str, Any]:
+def import_candidate(db: Session, candidate_id: int, *, auto_verify: bool = True, auto_score: bool = True) -> dict[str, Any]:
     candidate = db.query(JobCandidate).filter(JobCandidate.id == candidate_id).first()
     if candidate is None:
         raise ValueError(f"Candidate {candidate_id} was not found.")
@@ -905,7 +966,8 @@ def import_candidate(db: Session, candidate_id: int, *, auto_verify: bool = Fals
         run.total_imported = (run.total_imported or 0) + 1
     db.commit()
     db.refresh(candidate)
-    log_event(db, job_id=job.id, event_type="job_imported", notes="Imported from Stage 12 Job Finder candidate.", new_status=job.application_status, metadata_json={"candidate_id": candidate.id})
+    log_event(db, job_id=job.id, event_type="job_imported", notes="Imported from Job Finder candidate.", new_status=job.application_status, metadata_json={"candidate_id": candidate.id})
+    log_event(db, job_id=job.id, event_type="job_saved", notes="Saved from Job Finder candidate.", new_status=job.application_status, metadata_json={"candidate_id": candidate.id})
 
     verified = False
     scored = False
@@ -917,6 +979,19 @@ def import_candidate(db: Session, candidate_id: int, *, auto_verify: bool = Fals
             if updated:
                 job = updated
                 verified = True
+                log_event(
+                    db,
+                    job_id=job.id,
+                    event_type="verification_completed",
+                    notes=f"Auto-verified saved candidate: {job.verification_status}.",
+                    old_status=job.application_status,
+                    new_status=job.application_status,
+                    metadata_json={
+                        "candidate_id": candidate.id,
+                        "verification_status": job.verification_status,
+                        "verification_score": job.verification_score,
+                    },
+                )
                 if job.verification_status in {"open", "probably_open"}:
                     promote_job_status_if_needed(db, job.id, "verified_open", notes="Promoted after Job Finder import verification.")
                     db.refresh(job)
@@ -929,6 +1004,19 @@ def import_candidate(db: Session, candidate_id: int, *, auto_verify: bool = Fals
             if updated:
                 job = updated
                 scored = True
+                log_event(
+                    db,
+                    job_id=job.id,
+                    event_type="scoring_completed",
+                    notes="Auto-scored saved candidate.",
+                    old_status=job.application_status,
+                    new_status=job.application_status,
+                    metadata_json={
+                        "candidate_id": candidate.id,
+                        "resume_match_score": job.resume_match_score,
+                        "overall_priority_score": job.overall_priority_score,
+                    },
+                )
         except Exception as exc:
             warnings.append(f"Auto-score failed: {exc}")
     return {"candidate": candidate, "job": job, "verified": verified, "scored": scored, "warnings": warnings}

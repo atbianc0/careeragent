@@ -7,7 +7,7 @@ const navItems = [
   { href: "/", label: "Home" },
   { href: "/profile", label: "Profile" },
   { href: "/jobs", label: "Jobs" },
-  { href: "/applications", label: "Applications" },
+  { href: "/apply", label: "Apply" },
   { href: "/insights", label: "Insights" },
   { href: "/settings", label: "Settings" }
 ];
@@ -15,7 +15,7 @@ const navItems = [
 const routeGroups: Record<string, string[]> = {
   "/profile": ["/profile", "/resume"],
   "/jobs": ["/jobs", "/job-finder"],
-  "/applications": ["/applications", "/tracker", "/packets", "/autofill"],
+  "/apply": ["/apply", "/applications", "/packets", "/autofill"],
   "/insights": ["/insights", "/market", "/predictions"],
   "/settings": ["/settings", "/ai"],
 };

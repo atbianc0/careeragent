@@ -11,7 +11,6 @@ type AIManagerProps = {
 };
 
 export function AIManager({ initialStatus, initialProviders }: AIManagerProps) {
-  const [provider, setProvider] = useState(initialStatus.active_provider || "mock");
   const [prompt, setPrompt] = useState("Write one short safe sentence about reviewing AI drafts manually.");
   const [result, setResult] = useState<AIProviderResult | null>(null);
   const [testing, setTesting] = useState(false);
@@ -22,9 +21,11 @@ export function AIManager({ initialStatus, initialProviders }: AIManagerProps) {
     setError(null);
     try {
       const response = await testAIProvider({
-        provider,
-        task: "test",
+        task: "draft_cover_letter",
         prompt,
+        user_enabled: true,
+        user_triggered: true,
+        max_output_tokens: 120,
       });
       setResult(response);
     } catch (testError) {
@@ -43,14 +44,20 @@ export function AIManager({ initialStatus, initialProviders }: AIManagerProps) {
           <dl className="key-value">
             <dt>Configured Provider</dt>
             <dd>{initialStatus.configured_provider}</dd>
-            <dt>Active Provider</dt>
+            <dt>Selected AI_PROVIDER</dt>
+            <dd>{initialStatus.active_ai_provider}</dd>
+            <dt>Effective Runtime Provider</dt>
             <dd>{initialStatus.active_provider}</dd>
+            <dt>Current Model</dt>
+            <dd>{initialStatus.current_model}</dd>
             <dt>OpenAI Available</dt>
             <dd>{initialStatus.openai_available ? "Yes" : "No"}</dd>
-            <dt>Local Available</dt>
-            <dd>{initialStatus.local_available ? "Yes" : "No"}</dd>
-            <dt>API Key Present</dt>
+            <dt>Gemini Available</dt>
+            <dd>{initialStatus.gemini_available ? "Yes" : "No"}</dd>
+            <dt>OpenAI Key Present</dt>
             <dd>{initialStatus.api_key_present ? "Yes" : "No"}</dd>
+            <dt>Gemini Key Present</dt>
+            <dd>{initialStatus.gemini_key_present ? "Yes" : "No"}</dd>
             <dt>Safety Mode</dt>
             <dd>{initialStatus.safety_mode ? "Enabled" : "Disabled"}</dd>
           </dl>
@@ -68,7 +75,7 @@ export function AIManager({ initialStatus, initialProviders }: AIManagerProps) {
             ))}
           </ul>
           <p className="subtle">
-            The frontend never receives the API key itself. CareerAgent only reports whether a key is present.
+            The frontend never receives provider keys. CareerAgent only reports whether keys are present.
           </p>
         </article>
       </section>
@@ -78,20 +85,19 @@ export function AIManager({ initialStatus, initialProviders }: AIManagerProps) {
           <h2>Test Provider</h2>
           <span className="subtle">Safe draft output only</span>
         </div>
-        <p className="subtle">
-          AI output is a draft. Review before using it. CareerAgent should not invent experience, credentials, or work authorization details.
-        </p>
+          <p className="subtle">
+            This test uses the selected AI_PROVIDER from your environment and sends one short allowed writing-assist prompt.
+            External calls only happen when AI_ALLOW_EXTERNAL_CALLS=true and the selected provider key is configured.
+          </p>
 
         <div className="form-grid">
           <label className="field-group">
-            <span>Provider</span>
-            <select className="input" value={provider} onChange={(event) => setProvider(event.target.value)}>
-              {initialProviders.map((entry) => (
-                <option key={entry.name} value={entry.name}>
-                  {entry.name} {entry.available ? "" : "(unavailable)"}
-                </option>
-              ))}
-            </select>
+            <span>Selected provider</span>
+            <input className="input" value={initialStatus.active_ai_provider || initialStatus.configured_provider} readOnly />
+          </label>
+          <label className="field-group">
+            <span>Test action</span>
+            <input className="input" value="draft_cover_letter" readOnly />
           </label>
 
           <label className="field-group">
@@ -107,7 +113,7 @@ export function AIManager({ initialStatus, initialProviders }: AIManagerProps) {
 
         <div className="button-row">
           <button className="button" type="button" onClick={handleTest} disabled={testing}>
-            {testing ? "Testing..." : "Run Provider Test"}
+            {testing ? "Testing..." : "Run Selected Provider Test"}
           </button>
         </div>
 
@@ -122,6 +128,12 @@ export function AIManager({ initialStatus, initialProviders }: AIManagerProps) {
               <dd>{result.success ? "Yes" : "No"}</dd>
               <dt>Task</dt>
               <dd>{result.task}</dd>
+              <dt>External API Used</dt>
+              <dd>{result.raw?.api_used === true ? "Yes" : "No"}</dd>
+              <dt>Model</dt>
+              <dd>{typeof result.raw?.model === "string" ? result.raw.model : initialStatus.current_model}</dd>
+              <dt>Blocked Reason</dt>
+              <dd>{typeof result.raw?.blocked_reason === "string" ? result.raw.blocked_reason : "None"}</dd>
             </dl>
             {result.content ? <pre className="code-block">{result.content}</pre> : null}
             {result.parsed_json ? <pre className="code-block">{JSON.stringify(result.parsed_json, null, 2)}</pre> : null}

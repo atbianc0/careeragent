@@ -40,7 +40,21 @@ function getStatusClassName(status: string) {
 }
 
 function formatStatusLabel(value: string) {
-  return value.replace(/_/g, " ");
+  const labels: Record<string, string> = {
+    saved: "Saved",
+    verified_open: "Ready to Apply",
+    packet_ready: "Ready to Apply",
+    application_opened: "Applying",
+    autofill_started: "Applying",
+    autofill_completed: "Applying",
+    applied_manual: "Applied",
+    interview: "Interview",
+    rejected: "Rejected",
+    offer: "Offer",
+    withdrawn: "Withdrawn",
+    closed_before_apply: "Closed",
+  };
+  return labels[value] || value.replace(/_/g, " ");
 }
 
 function formatAvailability(job: Job) {
@@ -65,12 +79,11 @@ export function JobTable({ rows, onViewDescription }: JobTableProps) {
             <th>Description</th>
             <th>Location</th>
             <th>Role</th>
-            <th>Status</th>
             <th>Match</th>
-            <th>Priority</th>
-            <th>Availability</th>
+            <th>Verification</th>
+            <th>Status</th>
             <th>Next Action</th>
-            <th>Open</th>
+            <th>Details</th>
           </tr>
         </thead>
         <tbody>
@@ -87,7 +100,7 @@ export function JobTable({ rows, onViewDescription }: JobTableProps) {
                   </div>
                 </td>
                 <td>
-                  <Link href={`/jobs/${job.id}`} className="job-link">
+                  <Link href={`/apply?jobId=${job.id}`} className="job-link">
                     <strong>{job.title}</strong>
                   </Link>
                 </td>
@@ -104,29 +117,22 @@ export function JobTable({ rows, onViewDescription }: JobTableProps) {
                 <td>{job.role_category || "Other"}</td>
                 <td>
                   <div className="status-stack">
-                    <span className={getStatusClassName(job.application_status)}>{formatStatusLabel(activeDisplayStatus)}</span>
-                    {activeDisplayStatus !== job.application_status ? (
-                      <span className="subtle">Diagnostic result; not applied.</span>
-                    ) : null}
-                    {job.follow_up_at ? <span className="subtle">Follow up: {formatDate(job.follow_up_at)}</span> : null}
-                  </div>
-                </td>
-                <td>
-                  <div className="status-stack">
                     <span className="score">{formatScore(job.resume_match_score)}</span>
                     <span className="subtle">{job.scoring_status === "scored" ? "Scored" : "Needs scoring"}</span>
                   </div>
                 </td>
                 <td>
                   <div className="status-stack">
-                    <span className="score">{formatScore(job.overall_priority_score)}</span>
-                    <span className="subtle">Freshness: {formatScore(job.freshness_score)}</span>
+                    <span className={getStatusClassName(job.verification_status)}>{formatAvailability(job)}</span>
+                    <span className="subtle">Checked: {formatDate(job.last_checked_date)}</span>
                   </div>
                 </td>
                 <td>
                   <div className="status-stack">
-                    <span className={getStatusClassName(job.verification_status)}>{formatAvailability(job)}</span>
-                    <span className="subtle">Checked: {formatDate(job.last_checked_date)}</span>
+                    <span className={getStatusClassName(job.application_status)}>{formatStatusLabel(activeDisplayStatus)}</span>
+                    {activeDisplayStatus !== job.application_status ? (
+                      <span className="subtle">Diagnostic result; not applied.</span>
+                    ) : null}
                   </div>
                 </td>
                 <td>
@@ -139,7 +145,7 @@ export function JobTable({ rows, onViewDescription }: JobTableProps) {
                 </td>
                 <td>
                   <Link href={`/jobs/${job.id}`} className="button secondary compact">
-                    Open Job
+                    View Details
                   </Link>
                 </td>
               </tr>

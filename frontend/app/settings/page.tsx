@@ -49,12 +49,6 @@ export default async function SettingsPage({
 
   return (
     <div className="page">
-      <section className="hero">
-        <span className="eyebrow">Settings</span>
-        <h1>Settings</h1>
-        <p className="hero-copy">Manage AI provider, environment status, safety rules, and private-data guardrails.</p>
-      </section>
-
       <nav className="tab-nav" aria-label="Settings tabs">
         {tabs.map((tab) => (
           <Link className={activeTab === tab.key ? "tab-link active" : "tab-link"} href={tabHref(tab.key)} key={tab.key}>
@@ -63,7 +57,66 @@ export default async function SettingsPage({
         ))}
       </nav>
 
-      {activeTab === "ai" ? <AIManager initialStatus={aiStatus} initialProviders={providers.providers} /> : null}
+      {activeTab === "ai" ? (
+        <>
+          <section className="warning-panel">
+            <h2>AI Provider Policy</h2>
+            <p>
+              CareerAgent uses one AI provider at a time. Choose <code>mock</code>, <code>openai</code>, or <code>gemini</code> with <code>AI_PROVIDER</code>.
+              Core job search, parsing, matching, scoring, insights, and autofill remain local/rule-based.
+            </p>
+            <div className="panel-grid">
+              <article className="panel subtle-panel">
+                <h3>Selected Provider</h3>
+                <dl className="key-value">
+                  <dt>Active AI provider</dt>
+                  <dd>{aiStatus.active_ai_provider}</dd>
+                  <dt>External AI calls enabled</dt>
+                  <dd>{aiStatus.ai_allow_external_calls ? "AI_ALLOW_EXTERNAL_CALLS=true" : "AI_ALLOW_EXTERNAL_CALLS=false"}</dd>
+                  <dt>OpenAI configured</dt>
+                  <dd>{aiStatus.openai_configured ? "Configured" : "Missing key"}</dd>
+                  <dt>Gemini configured</dt>
+                  <dd>{aiStatus.gemini_configured ? "Configured" : "Missing key"}</dd>
+                  <dt>Current model</dt>
+                  <dd>{aiStatus.current_model}</dd>
+                  <dt>OpenAI model</dt>
+                  <dd>{aiStatus.openai_model || "gpt-4o-mini"}</dd>
+                  <dt>Gemini model</dt>
+                  <dd>{aiStatus.gemini_model || "gemini-2.5-flash"}</dd>
+                </dl>
+              </article>
+              <article className="panel subtle-panel">
+                <h3>Allowed AI Assist</h3>
+                <ul className="list">
+                  <li>OpenAI or Gemini: tailored resume suggestions, cover letters, recruiter messages, long application answers, and one-time Job Finder keyword generation.</li>
+                  <li>Only the selected <code>AI_PROVIDER</code> is used, even if both provider keys are configured.</li>
+                  <li>All AI writing output is draft-only and must be reviewed manually.</li>
+                </ul>
+              </article>
+              <article className="panel subtle-panel">
+                <h3>Never API-Driven</h3>
+                <ul className="list">
+                  <li>Job URL parsing, matching, scoring, verification, insights, saved-source search, autofill, and applying stay local/rule-based.</li>
+                  <li>CareerAgent does not scrape search engine HTML, LinkedIn, or Indeed automatically.</li>
+                  <li>CareerAgent never auto-submits applications or clicks final apply/send/confirm buttons.</li>
+                </ul>
+              </article>
+            </div>
+            {!aiStatus.ai_allow_external_calls ? (
+              <p className="message error">
+                External AI calls are disabled. Set <code>AI_ALLOW_EXTERNAL_CALLS=true</code> to allow the selected provider after explicit user action.
+              </p>
+            ) : null}
+            {aiStatus.active_ai_provider === "mock" ? <p className="message">Mock provider selected. No external AI credits will be used.</p> : null}
+            {aiStatus.active_ai_provider === "openai" ? <p className="message">OpenAI selected. Only OpenAI will be used for allowed AI actions.</p> : null}
+            {aiStatus.active_ai_provider === "gemini" ? <p className="message">Gemini selected. Only Gemini will be used for allowed AI actions.</p> : null}
+            {aiStatus.both_provider_keys_configured ? (
+              <p className="message">Both OpenAI and Gemini keys are configured, but only the selected AI_PROVIDER is used.</p>
+            ) : null}
+          </section>
+          <AIManager initialStatus={aiStatus} initialProviders={providers.providers} />
+        </>
+      ) : null}
 
       {activeTab === "environment" ? (
         <section className="panel-grid">
