@@ -564,7 +564,12 @@ def _infer_location(lines: list[str], text: str, remote_status: str) -> str:
     explicit = _find_prefixed_value(lines, ["location"])
     if explicit:
         return explicit
-    location_match = re.search(r"\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*,\s*[A-Z]{2})\b", text)
+    # Use [ \t]+ (not \s+) between the capitalized words that make up a
+    # multi-word city name so the match can't cross a newline — and, by
+    # extension, a blank-line paragraph break — and greedily swallow
+    # unrelated text (e.g. a company name) sitting ahead of the real
+    # "City, ST" line.
+    location_match = re.search(r"\b([A-Z][a-zA-Z]+(?:[ \t]+[A-Z][a-zA-Z]+)*,[ \t]*[A-Z]{2})\b", text)
     if location_match:
         return location_match.group(1)
     if remote_status == "Remote":

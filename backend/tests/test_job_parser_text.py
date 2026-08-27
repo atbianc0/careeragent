@@ -57,10 +57,7 @@ def test_parse_job_description_infers_core_fields_from_freeform_text():
 
     assert result["company"] == "Northwind Analytics"
     assert result["title"] == "Data Engineer at Northwind Analytics"
-    # Quirk: the location regex's `\s+` matches across blank lines, so it
-    # greedily spans from the first capitalized word in the text through
-    # the real "City, ST" match instead of stopping at line boundaries.
-    assert result["location"] == "Northwind Analytics\n\nAustin, TX"
+    assert result["location"] == "Austin, TX"
     assert result["remote_status"] == "Unknown"
     assert result["employment_type"] is None
     assert result["role_category"] == "Data Engineer"
@@ -259,10 +256,20 @@ def test_extract_skills_preferred_qualifications_heading_collision_quirk():
     assert result["preferred_skills"] == ["Kubernetes"]
 
 
-def test_infer_location_regex_spans_blank_lines_quirk():
+def test_infer_location_does_not_span_blank_lines():
+    # Regression test: the location regex previously used `\s+` between the
+    # words of a multi-word city name, which could match across a blank-line
+    # paragraph break and greedily capture preceding company-name text
+    # instead of stopping at the real "City, ST" line.
     text = "Data Engineer at Northwind Analytics\n\nAustin, TX\n\nJoin our team."
     lines = _get_non_empty_lines(text)
-    assert _infer_location(lines, text, "Unknown") == "Northwind Analytics\n\nAustin, TX"
+    assert _infer_location(lines, text, "Unknown") == "Austin, TX"
+
+
+def test_infer_location_multi_word_city_on_single_line():
+    text = "Data Engineer at Acme Corp\n\nNew York, NY\n\nJoin our team."
+    lines = _get_non_empty_lines(text)
+    assert _infer_location(lines, text, "Unknown") == "New York, NY"
 
 
 def test_is_workday_url():
