@@ -688,24 +688,27 @@ def extract_salary(text: str) -> dict[str, Any]:
         ),
     ]
     for pattern in patterns:
-        match = pattern.search(text)
-        if not match:
-            continue
-        groups = match.groups()
-        minimum = _parse_salary_number(groups[0], groups[1])
-        maximum = _parse_salary_number(groups[2], groups[3])
-        context_window = text[max(match.start() - 30, 0) : min(match.end() + 30, len(text))].lower()
-        matched_text = match.group(0).lower()
-        has_salary_context = any(token in context_window for token in ["salary", "compensation", "pay", "usd", "$"])
-        looks_like_year_range = "year" in context_window and "$" not in matched_text and "usd" not in matched_text
-        if looks_like_year_range and minimum < 1000 and maximum < 1000 and not has_salary_context:
-            continue
-        currency = groups[4].upper() if len(groups) > 4 and groups[4] else "USD"
-        return {
-            "salary_min": minimum,
-            "salary_max": maximum,
-            "salary_currency": currency,
-        }
+        for match in pattern.finditer(text):
+            groups = match.groups()
+            minimum = _parse_salary_number(groups[0], groups[1])
+            maximum = _parse_salary_number(groups[2], groups[3])
+            context_window = text[max(match.start() - 30, 0) : min(match.end() + 30, len(text))].lower()
+            matched_text = match.group(0).lower()
+            has_salary_context = any(token in context_window for token in ["salary", "compensation", "pay", "usd", "$"])
+            looks_like_year_range = "year" in context_window and "$" not in matched_text and "usd" not in matched_text
+            if looks_like_year_range and minimum < 1000 and maximum < 1000 and not has_salary_context:
+                # This candidate is a years-experience range, not a salary
+                # figure. Keep scanning for a later match of this same
+                # pattern instead of falling through to the next (stricter)
+                # pattern, which could otherwise miss a real salary that
+                # appears after an earlier "N-M years" phrase.
+                continue
+            currency = groups[4].upper() if len(groups) > 4 and groups[4] else "USD"
+            return {
+                "salary_min": minimum,
+                "salary_max": maximum,
+                "salary_currency": currency,
+            }
     return {
         "salary_min": None,
         "salary_max": None,

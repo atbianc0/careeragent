@@ -216,20 +216,21 @@ def test_extract_salary_no_salary_present():
     assert result == {"salary_min": None, "salary_max": None, "salary_currency": None}
 
 
-def test_extract_salary_masked_by_earlier_year_range_quirk():
-    # Quirk: extract_salary tries its patterns in order and only advances
-    # to the next pattern on a rejected match, it doesn't keep searching
-    # for a later match with the *same* pattern. A "3-5 years" phrase
-    # earlier in the text matches (and is correctly rejected by) the first
-    # pattern, but that consumes the attempt — the real dollar amount
-    # further down the text is never found because the stricter,
-    # mandatory-USD second pattern doesn't tolerate the "$" before each
-    # number.
+def test_extract_salary_not_masked_by_earlier_year_range():
+    # A "3-5 years" phrase earlier in the text is correctly rejected as a
+    # years-experience range (no currency context, values under 1000), and
+    # extract_salary keeps scanning for a later match instead of giving up
+    # after the first rejected candidate. The real dollar amount further
+    # down the text should still be found.
     result = extract_salary(
         "Requirements: 3-5 years of experience.\n"
         "Compensation: $130,000 - $160,000 USD."
     )
-    assert result == {"salary_min": None, "salary_max": None, "salary_currency": None}
+    assert result == {
+        "salary_min": 130000.0,
+        "salary_max": 160000.0,
+        "salary_currency": "USD",
+    }
 
 
 def test_extract_application_questions():
