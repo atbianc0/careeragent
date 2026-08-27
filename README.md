@@ -464,6 +464,16 @@ API_SERVER_URL=http://127.0.0.1:8000 NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8
 
 Using `127.0.0.1` avoids local environments where `localhost` resolves differently for server-side fetches. Host-mode SQLite is useful for smoke tests, but PostgreSQL in Docker is the normal app database.
 
+### Backend Tests
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+pytest
+```
+
+Tests run against a throwaway SQLite file (`backend/tests/.tmp/test.sqlite3`), never the PostgreSQL dev/prod database, so the suite is safe to run alongside a live Docker stack. No Docker or database container needs to be running to run the suite.
+
 ### End-To-End Smoke Test
 
 After the stack is running, a practical trial run is:

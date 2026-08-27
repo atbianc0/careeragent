@@ -579,6 +579,9 @@ job-database-script
 - `backend/scripts/job_finder_quality_checks.py`
   - Internal quality-check script for Job Finder behavior.
 
+- `backend/pytest.ini`, `backend/requirements-dev.txt`, `backend/tests/`
+  - pytest scaffold for backend automated tests. Runs against a host-mode SQLite file (not the dev/prod PostgreSQL database) via `conftest.py` fixtures; run with `pytest` from `backend/` after `pip install -r requirements-dev.txt`.
+
 ### Frontend
 
 - `frontend/package.json`
