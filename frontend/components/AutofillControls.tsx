@@ -228,6 +228,22 @@ function AutofillResult({ summary, onSessionClosed }: { summary: AutofillStartRe
         </section>
       ) : null}
 
+      {summary.status === "autofill_session_failed" ? (
+        <section className="warning-panel">
+          <strong>Autofill session failed unexpectedly</strong>
+          <p>{summary.message}</p>
+          {summary.details ? <p className="subtle">{summary.details}</p> : null}
+          <div className="button-row">
+            <a className="button secondary compact" href={summary.opened_url} target="_blank" rel="noreferrer">
+              Open in Browser
+            </a>
+            <Link className="button secondary compact" href={`/jobs/${summary.job_id}`}>
+              Back to Job
+            </Link>
+          </div>
+        </section>
+      ) : null}
+
       {summary.status === "no_fields_detected" ? (
         <section className="warning-panel">
           <strong>No form fields detected</strong>
@@ -498,7 +514,8 @@ export function AutofillControls({
         response.status === "invalid_or_truncated_url" ||
         response.status === "navigation_failed" ||
         response.status === "page_blocked_or_unavailable" ||
-        response.status === "browser_closed"
+        response.status === "browser_closed" ||
+        response.status === "autofill_session_failed"
       ) {
         setFillMessage(null);
         setFillError(response.message);

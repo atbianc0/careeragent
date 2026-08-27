@@ -72,6 +72,10 @@ WORKDAY_MANUAL_NEXT_ACTION = "Use Open in Browser and complete this application 
 INVALID_TRUNCATED_URL_MESSAGE = "This job URL appears truncated. Open the original posting and save the full URL before using autofill."
 NAVIGATION_FAILED_MESSAGE = "CareerAgent could not open this page in Chromium."
 BROWSER_CLOSED_MESSAGE = "The browser was closed. Start a new Fill Application session if needed."
+AUTOFILL_SESSION_FAILED_MESSAGE = (
+    "CareerAgent could not finish this autofill session because of an unexpected error. This may mean the site is "
+    "blocking automation, or something failed inside CareerAgent. CareerAgent did not submit anything."
+)
 PLAYWRIGHT_CHROMIUM_MISSING_MESSAGE = "Chromium is not installed for Playwright in the current backend environment."
 PLAYWRIGHT_CHROMIUM_INSTALL_COMMAND = "cd backend && source .venv/bin/activate && python -m playwright install chromium"
 PLAYWRIGHT_CHROMIUM_MISSING_DETAILS = (
@@ -1113,6 +1117,8 @@ def _browser_closed_summary(
     packet: ApplicationPacket | None,
     warnings: list[str],
     manual_values: list[dict[str, str]],
+    session_mode: str = "visible_review",
+    browser_mode: str = "headed",
     fields_detected: int = 0,
     fields_filled: int = 0,
     fields_skipped: int = 0,
@@ -1127,10 +1133,10 @@ def _browser_closed_summary(
         "job_id": job.id,
         "packet_id": packet.id if packet else None,
         "status": "browser_closed",
-        "mode": "visible_review",
-        "session_mode": "visible_review",
+        "mode": session_mode,
+        "session_mode": session_mode,
         "session_id": None,
-        "browser_mode": "headed",
+        "browser_mode": browser_mode,
         "opened_url": job.url,
         "fields_detected": fields_detected,
         "fields_filled": fields_filled,
@@ -1141,6 +1147,49 @@ def _browser_closed_summary(
         "manual_review_required": True,
         "message": BROWSER_CLOSED_MESSAGE,
         "recommended_next_action": "Start a new Fill Application session if you still want visible autofill.",
+        "manual_values": manual_values,
+        "field_results": field_results or [],
+    }
+
+
+def _session_failed_summary(
+    *,
+    job: Job,
+    packet: ApplicationPacket | None,
+    session_mode: str,
+    browser_mode: str,
+    warnings: list[str],
+    manual_values: list[dict[str, str]],
+    detail: str,
+    fields_detected: int = 0,
+    fields_filled: int = 0,
+    fields_skipped: int = 0,
+    files_uploaded: list[str] | None = None,
+    blocked_actions: list[str] | None = None,
+    field_results: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "success": False,
+        "autofill_effective": False,
+        "can_continue_in_browser": False,
+        "job_id": job.id,
+        "packet_id": packet.id if packet else None,
+        "status": "autofill_session_failed",
+        "mode": session_mode,
+        "session_mode": session_mode,
+        "session_id": None,
+        "browser_mode": browser_mode,
+        "opened_url": job.url,
+        "fields_detected": fields_detected,
+        "fields_filled": fields_filled,
+        "fields_skipped": fields_skipped,
+        "files_uploaded": files_uploaded or [],
+        "blocked_actions": blocked_actions or [],
+        "warnings": warnings,
+        "manual_review_required": True,
+        "message": AUTOFILL_SESSION_FAILED_MESSAGE,
+        "details": detail,
+        "recommended_next_action": "Use Open in Browser and complete this application manually, or try Fill Application again.",
         "manual_values": manual_values,
         "field_results": field_results or [],
     }
@@ -1734,11 +1783,12 @@ def _fill_safe_fields(
     user_triggered: bool,
     headless: bool,
     playwright_error_type: Any,
-) -> tuple[list[dict[str, Any]], int, int, list[str]]:
+) -> tuple[list[dict[str, Any]], int, int, list[str], bool]:
     field_results: list[dict[str, Any]] = []
     fields_filled = 0
     fields_attempted = 0
     files_uploaded: list[str] = []
+    browser_closed_during_fill = False
 
     if headless and allow_sensitive_optional:
         warnings.append("Headless mode skips sensitive optional fields even when optional EEO autofill is requested.")
@@ -1847,6 +1897,11 @@ def _fill_safe_fields(
             filled, reason = _apply_value_to_field(page, field, value)
         except playwright_error_type as exc:
             filled = False
+            if _is_browser_closed_error(exc):
+                reason = f"Browser session closed during fill: {_concise_playwright_error(exc)}"
+                append_result(filled=False, action="skipped", reason=reason)
+                browser_closed_during_fill = True
+                break
             reason = f"Browser interaction failed: {exc}"
 
         if filled:
@@ -1868,7 +1923,7 @@ def _fill_safe_fields(
                 reason = "skipped_no_resume_pdf"
         append_result(filled=filled, action=action, reason=reason, result_value=value)
 
-    return field_results, fields_filled, fields_attempted, files_uploaded
+    return field_results, fields_filled, fields_attempted, files_uploaded, browser_closed_during_fill
 
 
 def _start_visible_review_session(
@@ -2034,7 +2089,7 @@ def _start_visible_review_session(
             )
 
         if fields_detected:
-            field_results, fields_filled, fields_attempted, files_uploaded = _fill_safe_fields(
+            field_results, fields_filled, fields_attempted, files_uploaded, browser_closed_during_fill = _fill_safe_fields(
                 page=form_context,
                 fields_detected=fields_detected,
                 values=values,
@@ -2047,6 +2102,21 @@ def _start_visible_review_session(
                 headless=False,
                 playwright_error_type=playwright_error_type,
             )
+            if browser_closed_during_fill:
+                summary = _browser_closed_summary(
+                    job=job,
+                    packet=packet,
+                    warnings=warnings,
+                    manual_values=manual_values,
+                    fields_detected=len(fields_detected),
+                    fields_filled=fields_filled,
+                    fields_skipped=max(len(fields_detected) - fields_filled, 0),
+                    files_uploaded=files_uploaded,
+                    blocked_actions=blocked_actions,
+                    field_results=field_results,
+                )
+                save_session_summary(summary)
+                return summary
         else:
             if _is_workday_url(job.url) and apply_actions:
                 warnings.append("An Apply button or link was found on this Workday page, but CareerAgent did not click it automatically.")
@@ -2217,9 +2287,41 @@ def _start_visible_review_session(
             }
             save_session_summary(summary)
             return summary
-        raise AutofillUnavailableError(_concise_playwright_error(exc)) from exc
+        summary = _session_failed_summary(
+            job=job,
+            packet=packet,
+            session_mode="visible_review",
+            browser_mode="headed",
+            warnings=warnings,
+            manual_values=manual_values,
+            detail=_concise_playwright_error(exc),
+            fields_detected=len(fields_detected),
+            fields_filled=fields_filled,
+            fields_skipped=max(len(fields_detected) - fields_filled, 0),
+            files_uploaded=files_uploaded,
+            blocked_actions=blocked_actions,
+            field_results=field_results,
+        )
+        save_session_summary(summary)
+        return summary
     except Exception as exc:
-        raise AutofillError(f"Visible autofill could not complete safely: {exc}") from exc
+        summary = _session_failed_summary(
+            job=job,
+            packet=packet,
+            session_mode="visible_review",
+            browser_mode="headed",
+            warnings=warnings,
+            manual_values=manual_values,
+            detail=f"Unexpected error: {exc}",
+            fields_detected=len(fields_detected),
+            fields_filled=fields_filled,
+            fields_skipped=max(len(fields_detected) - fields_filled, 0),
+            files_uploaded=files_uploaded,
+            blocked_actions=blocked_actions,
+            field_results=field_results,
+        )
+        save_session_summary(summary)
+        return summary
     finally:
         if not session_stored:
             for resource in (context_manager, browser):
@@ -2474,7 +2576,7 @@ def start_autofill_session(
                 browser.close()
                 return summary
 
-            field_results, fields_filled, fields_attempted, files_uploaded = _fill_safe_fields(
+            field_results, fields_filled, fields_attempted, files_uploaded, browser_closed_during_fill = _fill_safe_fields(
                 page=page,
                 fields_detected=fields_detected,
                 values=values,
@@ -2487,6 +2589,24 @@ def start_autofill_session(
                 headless=headless,
                 playwright_error_type=PlaywrightError,
             )
+            if browser_closed_during_fill:
+                summary = _browser_closed_summary(
+                    job=job,
+                    packet=packet,
+                    warnings=warnings,
+                    manual_values=manual_values,
+                    session_mode=session_mode,
+                    browser_mode=browser_mode,
+                    fields_detected=len(fields_detected),
+                    fields_filled=fields_filled,
+                    fields_skipped=max(len(fields_detected) - fields_filled, 0),
+                    files_uploaded=files_uploaded,
+                    blocked_actions=blocked_actions,
+                    field_results=field_results,
+                )
+                completed_logged = True
+                save_session_summary(summary)
+                return summary
 
             screenshot_path = _capture_screenshot(page, job.id, "after-attempt", warnings) if headless else screenshot_path
             autofill_effective = fields_filled > 0 or bool(files_uploaded)
@@ -2625,9 +2745,41 @@ def start_autofill_session(
             }
             save_session_summary(summary)
             return summary
-        raise AutofillUnavailableError(_concise_playwright_error(exc)) from exc
+        summary = _session_failed_summary(
+            job=job,
+            packet=packet,
+            session_mode=session_mode,
+            browser_mode=browser_mode,
+            warnings=warnings,
+            manual_values=manual_values,
+            detail=_concise_playwright_error(exc),
+            fields_detected=len(fields_detected),
+            fields_filled=fields_filled,
+            fields_skipped=max(len(fields_detected) - fields_filled, 0),
+            files_uploaded=files_uploaded,
+            blocked_actions=blocked_actions,
+            field_results=field_results,
+        )
+        save_session_summary(summary)
+        return summary
     except Exception as exc:
-        raise AutofillError(f"Autofill could not complete safely: {exc}") from exc
+        summary = _session_failed_summary(
+            job=job,
+            packet=packet,
+            session_mode=session_mode,
+            browser_mode=browser_mode,
+            warnings=warnings,
+            manual_values=manual_values,
+            detail=f"Unexpected error: {exc}",
+            fields_detected=len(fields_detected),
+            fields_filled=fields_filled,
+            fields_skipped=max(len(fields_detected) - fields_filled, 0),
+            files_uploaded=files_uploaded,
+            blocked_actions=blocked_actions,
+            field_results=field_results,
+        )
+        save_session_summary(summary)
+        return summary
     finally:
         if started_logged and not completed_logged:
             save_session_summary(
