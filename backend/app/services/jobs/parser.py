@@ -606,7 +606,6 @@ def infer_remote_status(text: str) -> str:
 
 
 def infer_role_category(title: str, description: str) -> str:
-    haystack = f"{title}\n{description}".lower()
     rules = [
         ("Data Scientist", ["data scientist", "applied scientist"]),
         ("Data Engineer", ["data engineer", "etl engineer", "analytics pipeline"]),
@@ -615,6 +614,17 @@ def infer_role_category(title: str, description: str) -> str:
         ("Data Analyst", ["data analyst", "business analyst", "analytics analyst"]),
         ("Software Engineer", ["software engineer", "backend engineer", "frontend engineer", "full stack"]),
     ]
+    # The job title is the authoritative signal for role category. Check it
+    # in isolation first so that incidental keyword mentions elsewhere in
+    # the body text (e.g. "collaborate with data scientists" in a Data
+    # Engineer posting) can't override an unambiguous title.
+    title_lowered = title.lower()
+    for label, keywords in rules:
+        if any(keyword in title_lowered for keyword in keywords):
+            return label
+    # The title alone was inconclusive, so fall back to scanning the full
+    # text (title + description) for keywords.
+    haystack = f"{title}\n{description}".lower()
     for label, keywords in rules:
         if any(keyword in haystack for keyword in keywords):
             return label
@@ -622,15 +632,25 @@ def infer_role_category(title: str, description: str) -> str:
 
 
 def infer_seniority(title: str, description: str) -> str:
+    buckets = [
+        ("Internship", ["intern", "internship"]),
+        ("New Grad", ["new grad", "new graduate", "recent graduate", "university graduate", "new college grad", "college grad"]),
+        ("Entry Level", ["entry level", "entry-level", "associate", "junior", "early career"]),
+        ("Senior", ["senior", "staff", "principal", "lead", "head of", "manager"]),
+    ]
+    # Prioritize the job title over incidental keyword mentions in the body
+    # text (e.g. "you will mentor junior data scientists" in a Senior-titled
+    # posting shouldn't flip the inferred seniority to Entry Level).
+    title_lowered = title.lower()
+    for label, keywords in buckets:
+        if any(keyword in title_lowered for keyword in keywords):
+            return label
+    # The title alone didn't indicate seniority, so fall back to scanning
+    # the full text (title + description) for keywords.
     haystack = f"{title}\n{description}".lower()
-    if any(keyword in haystack for keyword in ["intern", "internship"]):
-        return "Internship"
-    if any(keyword in haystack for keyword in ["new grad", "new graduate", "recent graduate", "university graduate", "new college grad", "college grad"]):
-        return "New Grad"
-    if any(keyword in haystack for keyword in ["entry level", "entry-level", "associate", "junior", "early career"]):
-        return "Entry Level"
-    if any(keyword in haystack for keyword in ["senior", "staff", "principal", "lead", "head of", "manager"]):
-        return "Senior"
+    for label, keywords in buckets:
+        if any(keyword in haystack for keyword in keywords):
+            return label
     years = extract_years_experience(description)
     max_years = years["years_experience_max"]
     min_years = years["years_experience_min"]

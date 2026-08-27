@@ -121,31 +121,51 @@ def test_infer_seniority_buckets(title, description, expected):
     assert infer_seniority(title, description) == expected
 
 
-def test_infer_seniority_junior_mention_quirk_overrides_senior_title():
-    # Quirk: "Entry Level" keywords (["...", "junior", "..."]) are checked
-    # before the "Senior" bucket, so any mention of a *junior colleague*
-    # elsewhere in the text — even with an explicitly Senior title — flips
-    # the inferred seniority to "Entry Level".
+def test_infer_seniority_prioritizes_title_over_body_mentions():
+    # Regression: mentioning "junior" elsewhere in the text (e.g. a
+    # *junior colleague* being mentored) must not override an explicitly
+    # Senior-titled posting. The title is checked first and is
+    # unambiguous, so it wins over the incidental body-text keyword.
     result = infer_seniority(
         "Senior Data Scientist",
         "You will mentor junior data scientists on the team.",
     )
+    assert result == "Senior"
+
+
+def test_infer_seniority_falls_back_to_body_when_title_inconclusive():
+    # When the title itself gives no seniority signal, body-text keywords
+    # still apply as a fallback.
+    result = infer_seniority(
+        "Data Scientist",
+        "This role is entry level and great for early-career candidates.",
+    )
     assert result == "Entry Level"
 
 
-def test_infer_role_category_substring_quirk():
-    # Quirk: category keywords are matched as plain substrings, so a
-    # "Data Engineer" role that merely mentions "data scientists" in a
-    # responsibility bullet gets miscategorized, because "Data Scientist"
-    # is checked first in the rule list and "data scientist" is a
-    # substring of "data scientists".
+def test_infer_role_category_prioritizes_title_over_body_mentions():
+    # Regression: a "Data Engineer" role that merely mentions "data
+    # scientists" in a responsibility bullet must not be miscategorized,
+    # even though "data scientist" is a substring of "data scientists" and
+    # is checked first in the rule list. The title is checked in isolation
+    # first, so the unambiguous "Data Engineer" title wins.
     clean = infer_role_category("Data Engineer", "Build ETL pipelines.")
     collided = infer_role_category(
         "Data Engineer",
         "You will collaborate with data scientists on feature pipelines.",
     )
     assert clean == "Data Engineer"
-    assert collided == "Data Scientist"
+    assert collided == "Data Engineer"
+
+
+def test_infer_role_category_falls_back_to_body_when_title_inconclusive():
+    # When the title itself gives no role-category signal, body-text
+    # keywords still apply as a fallback.
+    result = infer_role_category(
+        "Team Member",
+        "You will build and maintain ETL pipelines as a data engineer.",
+    )
+    assert result == "Data Engineer"
 
 
 @pytest.mark.parametrize(
