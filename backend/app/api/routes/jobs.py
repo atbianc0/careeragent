@@ -213,6 +213,11 @@ def start_ai_assisted_apply(
         if "was not found" in message:
             raise HTTPException(status_code=404, detail=message) from exc
         raise HTTPException(status_code=400, detail=message) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"AI-assisted apply failed while generating the application packet: {exc}",
+        ) from exc
 
     packet = result["packet"]
     job = result["job"]
@@ -220,9 +225,16 @@ def start_ai_assisted_apply(
     warnings = list(metadata.get("ai_warnings") or [])
     ai_used = bool(metadata.get("api_used"))
     provider = metadata.get("provider") if isinstance(metadata.get("provider"), str) else None
+    ai_attempted = str(metadata.get("generation_mode") or "").startswith("ai_")
     packet_status = str(getattr(packet, "generation_status", "") or "completed")
     if ai_used or provider == "mock":
         message = "AI-assisted application materials are ready to review. CareerAgent did not submit anything."
+    elif ai_attempted:
+        message = (
+            f"{provider or 'The AI provider'} was called but did not return usable output for this packet "
+            "(see warnings below), so CareerAgent used deterministic content instead. "
+            "You can continue with Basic Autofill or try AI-assisted apply again."
+        )
     else:
         message = "AI is disabled or unavailable. Created/reused a local packet. You can continue with Basic Autofill or enable AI in Settings."
     if packet_status == "completed_with_warnings":

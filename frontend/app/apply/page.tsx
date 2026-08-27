@@ -266,6 +266,7 @@ export default function ApplyPage() {
   const [busy, setBusy] = useState<BusyAction>(null);
   const [activeMode, setActiveMode] = useState<"ai" | "basic" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [messageTone, setMessageTone] = useState<"success" | "warning">("success");
   const [error, setError] = useState<string | null>(null);
   const [selectionMessage, setSelectionMessage] = useState<string | null>(null);
   const [openFallbackUrl, setOpenFallbackUrl] = useState<string | null>(null);
@@ -329,6 +330,7 @@ export default function ApplyPage() {
     setFillResult(null);
     setOpenFallbackUrl(null);
     setMessage(null);
+    setMessageTone("success");
     setError(null);
     try {
       const response = await startAiAssistedApply(selectedJob.id);
@@ -340,6 +342,7 @@ export default function ApplyPage() {
       }
       setActiveMode("ai");
       setMessage(response.message || "AI resume draft and application answers are ready to review.");
+      setMessageTone(response.ai_used || response.provider === "mock" ? "success" : "warning");
       if (response.visible_autofill_available && response.can_fill_application) {
         await runFillApplication(response.packet_id, true);
       }
@@ -360,6 +363,7 @@ export default function ApplyPage() {
     setFillResult(null);
     setOpenFallbackUrl(null);
     setMessage(null);
+    setMessageTone("success");
     setError(null);
     try {
       const response = await startBasicAutofill(selectedJob.id, {
@@ -384,6 +388,7 @@ export default function ApplyPage() {
     if (!selectedJob) return;
     setBusy("open");
     setMessage(null);
+    setMessageTone("success");
     setError(null);
     setOpenFallbackUrl(null);
     try {
@@ -407,6 +412,7 @@ export default function ApplyPage() {
     if (!selectedJob) return;
     setBusy("fill");
     setMessage("Opening visible Chromium and filling application...");
+    setMessageTone("success");
     setError(null);
     setFillResult(null);
     try {
@@ -439,6 +445,7 @@ export default function ApplyPage() {
     try {
       await closeAutofillSession(sessionId);
       setMessage("Visible Chromium session closed.");
+      setMessageTone("success");
       setFillResult((current) => current ? { ...current, session_id: null } : current);
       await load(selectedJob ? String(selectedJob.id) : null);
     } catch (closeError) {
@@ -452,6 +459,7 @@ export default function ApplyPage() {
     if (!selectedJob) return;
     setBusy("applied");
     setMessage(null);
+    setMessageTone("success");
     setError(null);
     try {
       const response = await markJobApplied(selectedJob.id);
@@ -589,7 +597,7 @@ export default function ApplyPage() {
         {status && !status.visible_autofill_available ? <p className="message warning">{status.message}</p> : null}
         {disabledReason ? <p className="message warning">{disabledReason}</p> : null}
         <p className="message warning">Review everything and click Submit yourself. CareerAgent never submits.</p>
-        {message ? <p className="message success">{message}</p> : null}
+        {message ? <p className={`message ${messageTone}`}>{message}</p> : null}
         {openFallbackUrl ? (
           <p className="message warning">
             <a className="inline-link" href={openFallbackUrl} target="_blank" rel="noreferrer">
