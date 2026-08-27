@@ -117,6 +117,17 @@ EDUCATION_HEADINGS = [
     "education requirements",
 ]
 ALL_HEADINGS = RESPONSIBILITY_HEADINGS + REQUIREMENT_HEADINGS + EDUCATION_HEADINGS + PREFERRED_SECTION_KEYWORDS
+# Priority order used to classify a heading line when more than one group's
+# keywords could match it. Most specific first: "Preferred Qualifications"
+# contains the word "qualifications" (a REQUIREMENT_HEADINGS keyword), but it
+# is unambiguously a PREFERRED heading and must be classified as such rather
+# than as a continuation of REQUIREMENT_HEADINGS.
+_HEADING_KEYWORD_GROUPS = [
+    PREFERRED_SECTION_KEYWORDS,
+    EDUCATION_HEADINGS,
+    RESPONSIBILITY_HEADINGS,
+    REQUIREMENT_HEADINGS,
+]
 
 
 def _clean_text(text: str) -> str:
@@ -484,12 +495,29 @@ def _line_is_heading(line: str) -> bool:
     return any(keyword in cleaned for keyword in ALL_HEADINGS)
 
 
+def _matches_heading_group(line: str, heading_keywords: list[str]) -> bool:
+    """True if `line` is a heading that belongs to `heading_keywords` specifically.
+
+    Some heading keywords are substrings of a more specific heading (e.g.
+    "qualifications" inside "Preferred Qualifications"). To avoid crediting a
+    line to the wrong, less-specific group, this resolves the line to the
+    *first* matching group in `_HEADING_KEYWORD_GROUPS` (priority order) and
+    only reports a match if that resolved group is the one being asked about.
+    """
+    if len(line) > 80:
+        return False
+    lowered = line.lower().rstrip(":")
+    for group in _HEADING_KEYWORD_GROUPS:
+        if any(keyword in lowered for keyword in group):
+            return group is heading_keywords
+    return False
+
+
 def _extract_section(lines: list[str], heading_keywords: list[str]) -> list[str]:
     collected: list[str] = []
     in_section = False
     for line in lines:
-        lowered = line.lower().rstrip(":")
-        if any(keyword in lowered for keyword in heading_keywords) and len(line) <= 80:
+        if _matches_heading_group(line, heading_keywords):
             in_section = True
             continue
         if in_section and _line_is_heading(line):

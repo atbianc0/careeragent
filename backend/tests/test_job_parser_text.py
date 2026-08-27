@@ -241,12 +241,12 @@ def test_extract_skills_required_vs_preferred_split():
     assert result["preferred_skills"] == ["AWS", "Kubernetes"]
 
 
-def test_extract_skills_preferred_qualifications_heading_collision_quirk():
-    # Quirk: "qualifications" is itself one of REQUIREMENT_HEADINGS, so a
-    # "Preferred Qualifications:" heading is treated as *another* instance
-    # of the Requirements heading rather than a section boundary. The two
-    # sections bleed together and a preferred-only skill (Kubernetes) leaks
-    # into required_skills.
+def test_extract_skills_preferred_qualifications_heading_is_its_own_section():
+    # "Preferred Qualifications" contains the word "qualifications", which is
+    # also a Requirements heading keyword. Despite that substring collision,
+    # "Preferred Qualifications" must be recognized as its own section
+    # boundary, so a preferred-only skill (Kubernetes) stays out of
+    # required_skills and only shows up as preferred.
     text = (
         "Requirements:\n"
         "- Proficiency in Python and SQL\n"
@@ -255,7 +255,7 @@ def test_extract_skills_preferred_qualifications_heading_collision_quirk():
         "- Experience with Kubernetes\n"
     )
     result = extract_skills(text)
-    assert result["required_skills"] == ["Python", "SQL", "Kubernetes"]
+    assert result["required_skills"] == ["Python", "SQL"]
     assert result["preferred_skills"] == ["Kubernetes"]
 
 
