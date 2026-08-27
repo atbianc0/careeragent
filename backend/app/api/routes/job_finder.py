@@ -233,7 +233,7 @@ def import_selected_candidates(
     errors: list[str] = []
     for candidate_id in payload.candidate_ids:
         try:
-            result = import_candidate(db, candidate_id, auto_verify=True, auto_score=True)
+            result = import_candidate(db, candidate_id, auto_verify=payload.auto_verify, auto_score=payload.auto_score)
             jobs.append(result["job"])
             errors.extend(result.get("warnings") or [])
         except ValueError as exc:
@@ -266,7 +266,7 @@ def import_one_candidate(
     db: Session = Depends(get_db),
 ) -> JobCandidateImportResponse:
     try:
-        result = import_candidate(db, candidate_id, auto_verify=True, auto_score=True)
+        result = import_candidate(db, candidate_id, auto_verify=auto_verify, auto_score=auto_score)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JobCandidateImportResponse(**result)

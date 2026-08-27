@@ -19,6 +19,13 @@ NEW_GRAD_RE = re.compile(
     flags=re.IGNORECASE,
 )
 MID_TITLE_RE = re.compile(r"\b(?:level ii|software engineer ii|data engineer ii|data scientist ii|experienced)\b", flags=re.IGNORECASE)
+NEW_GRAD_NEGATION_RE = re.compile(
+    r"\b(?:not|isn't|is not|aren't|are not|won't|will not|no longer|not suitable for|"
+    r"not intended for|not appropriate for|not open to|not looking for|not eligible for|"
+    r"not a fit for|not designed for)\b",
+    flags=re.IGNORECASE,
+)
+NEW_GRAD_NEGATION_WINDOW = 80
 
 IGNORED_YEAR_CONTEXT_RE = re.compile(
     r"\b(?:team of|top|days?|offices?|products?|million|billion|founded|raised|series [a-z]|fortune\s*500|"
@@ -192,6 +199,16 @@ def _find_year_requirement(text: str) -> dict[str, Any]:
     return best
 
 
+def _first_unnegated_new_grad_match(lower_text: str) -> re.Match[str] | None:
+    for match in NEW_GRAD_RE.finditer(lower_text):
+        window_start = max(0, match.start() - NEW_GRAD_NEGATION_WINDOW)
+        preceding = lower_text[window_start:match.start()]
+        if NEW_GRAD_NEGATION_RE.search(preceding):
+            continue
+        return match
+    return None
+
+
 def classify_experience_requirements(title: str | None, description: str | None) -> dict[str, Any]:
     title_text = _norm(title)
     text = _norm(f"{title or ''}\n{description or ''}")
@@ -216,10 +233,8 @@ def classify_experience_requirements(title: str | None, description: str | None)
         reasons.append("Experience level is senior because the title contains senior/staff/principal/lead/manager language.")
         level = "senior"
         confidence = 96
-    elif NEW_GRAD_RE.search(lower_text):
-        matched = NEW_GRAD_RE.search(lower_text)
-        if matched:
-            signals.append(matched.group(0))
+    elif (matched := _first_unnegated_new_grad_match(lower_text)) is not None:
+        signals.append(matched.group(0))
         if years_min == 0 and years_max is not None and years_max <= 2:
             level = "early_career"
             reasons.append("Experience requirement appears early-career because the posting asks for 0-2 years.")

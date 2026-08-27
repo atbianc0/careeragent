@@ -366,8 +366,8 @@ class JobFinderRunResponse(BaseModel):
 
 class JobCandidateImportSelectedRequest(BaseModel):
     candidate_ids: list[int]
-    auto_verify: bool = False
-    auto_score: bool = False
+    auto_verify: bool = True
+    auto_score: bool = True
 
 
 class JobCandidateImportResponse(BaseModel):

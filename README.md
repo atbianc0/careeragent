@@ -57,7 +57,7 @@ AI assistance is optional and only runs after an explicit AI-assisted apply clic
 - Stage 9: Complete
 - Stage 10: Complete
 - Stage 11: Complete
-- Stage 12: Initial implementation
+- Stage 12: Complete
 
 Stage 12 adds a safe, source-based Job Finder that imports a saved ATS/company source database, discovers reviewable candidates from known boards and company career pages, deduplicates/filters them, and lets the user save selected candidates into the Jobs -> Apply workflow. Saving a job automatically runs verification and scoring.
 
@@ -161,6 +161,9 @@ Stage 12 adds a safe, source-based Job Finder that imports a saved ATS/company s
 - Workday pages are often JavaScript-heavy and may return partial URL-inferred candidates.
 - Some company pages block requests or require browser rendering.
 - Users should review candidates before importing.
+- Experience-level classification is text/regex-based and approximate; it now recognizes common negation phrasing ("not intended for ... new graduate") so senior-only postings that merely mention entry-level terms aren't misclassified as new-grad, but unusual phrasing can still slip through.
+- The saved-source management UI exposes enable/disable per source; renaming a source or editing its notes is available via the API but has no dedicated UI control yet.
+- The manual URL/ATS search action ("Find Jobs from Manual URLs") lives in a collapsed "Advanced manual source URL search" panel rather than as a top-level action; the primary path is searching saved sources.
 
 ## Using the Job Source Database
 
