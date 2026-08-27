@@ -130,6 +130,14 @@ _HEADING_KEYWORD_GROUPS = [
 ]
 
 
+BLOCK_LEVEL_TAGS = (
+    "address", "article", "aside", "blockquote", "dd", "div", "dl", "dt",
+    "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6",
+    "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section", "table",
+    "tr", "ul",
+)
+
+
 def _clean_text(text: str) -> str:
     return normalize_whitespace(text.replace("\xa0", " "))
 
@@ -151,8 +159,20 @@ def _unique_preserve_order(values: list[str]) -> list[str]:
 
 
 def _html_to_text(value: str) -> str:
+    # JSON-LD job descriptions are HTML. Block-level element boundaries
+    # (<p>, <li>, <br>, <div>, headings, etc.) carry the section structure
+    # that downstream heading detection (_line_is_heading / _extract_section)
+    # relies on, so they must be turned into explicit newlines *before*
+    # whitespace is normalized. Normalizing first (or with a plain "\n"
+    # separator between every text node) would either collapse those
+    # boundaries into spaces or fragment the text on every inline tag.
     soup = BeautifulSoup(value or "", "html.parser")
-    return _clean_text(soup.get_text("\n", strip=True))
+    for br in soup.find_all("br"):
+        br.replace_with("\n")
+    for tag in soup.find_all(BLOCK_LEVEL_TAGS):
+        tag.append("\n")
+    lines = (normalize_whitespace(line.replace("\xa0", " ")) for line in soup.get_text().splitlines())
+    return "\n".join(line for line in lines if line)
 
 
 def _is_readable_text(text: str) -> bool:

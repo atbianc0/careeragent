@@ -143,14 +143,19 @@ def test_parse_job_url_json_ld_job_posting_with_readable_description():
     assert set(result["required_skills"]) == {"Python", "PostgreSQL", "AWS", "Docker", "Kubernetes"}
     assert result["parsing_status"] == "full"
     assert result["raw_parsed_data"]["source_type"] == "json_ld"
-    # Quirk: JSON-LD descriptions are HTML, and _html_to_text/_json_string
-    # collapse all whitespace (including the newlines BeautifulSoup inserts
-    # between tags) into single spaces. With no line breaks left, the
-    # Responsibilities/Requirements headings can never be recognized as
-    # section boundaries, so both fields fall back to matching the entire
-    # description as one undivided blob.
-    assert result["responsibilities"] == result["requirements"]
-    assert result["responsibilities"][0].startswith("Vector Systems is looking for")
+    # JSON-LD descriptions are HTML: _html_to_text/_json_string turn
+    # block-level element boundaries (<p>, <h2>, <ul>, <li>) into newlines
+    # before normalizing within-line whitespace, so line-based section
+    # heading detection can find the Responsibilities/Requirements
+    # boundaries and split them into distinct lists.
+    assert result["responsibilities"] == [
+        "Design and build backend services using Python and PostgreSQL",
+        "Operate and monitor production systems running on AWS and Docker",
+    ]
+    assert result["requirements"] == [
+        "5+ years of experience with Python and PostgreSQL",
+        "Experience with Docker and Kubernetes",
+    ]
 
 
 def test_parse_job_url_json_ld_short_description_falls_back_to_url_slug():
